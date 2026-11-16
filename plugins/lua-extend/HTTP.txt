@@ -1,0 +1,30 @@
+Lua Extend HTTP（开发版本，尚未升级稳定安装）
+
+local Extend = require('sv2_extend')
+local handle = Extend.http.request({
+  url='http://127.0.0.1:8080/api', method='POST',
+  headers={['Content-Type']='application/json'}, body='{"text":"声库"}'
+}, function(response, error)
+  -- 先消费结果，再 SV:finish()；不要在请求结束前退出脚本。
+end)
+-- 可选：handle.cancel()；也可用 handle:cancel()。
+
+Extend.http.get(url, callback) 保持调用形式，现也返回取消句柄。
+Lua callback 顺序为 response,error；JS 为 error,response。
+交付回调前取消返回 HTTP_CANCELLED，重复取消/完成后取消安全。
+取消不能撤回已经发出的数据；它不是事务回滚。
+
+共享 Loader 的 http.start/status/cancel 能力；不启动外部 HTTP/Lua 服务，
+不使用文件或 pipe 传递请求。支持 HTTP/HTTPS GET/HEAD/POST/PUT/PATCH/
+DELETE/OPTIONS，UTF-8 请求体上限64KiB；响应最多512KiB，超时8秒。
+TLS校验开启，不跟随重定向，二进制响应编码为base64；二进制请求体未实现。
+不携带厂商账号cookie或session。
+
+访问策略采用 Loader 中当前数据目录保存的本机回环/其他网络开关。
+两种脚本语言走同一能力提供者和同一策略，不另设Lua绕过接口。
+
+真实验证：SV2 2.3.0 arm64，现有自有宿主PID58069；官方Lua脚本加载与
+源文件摘要相同的独立测试模块，POST/头/中文body/取消/立即取消/后续GET/
+单次回调/PID/主线程/服务器连接关闭通过。此验证不等于安装更新，也不替代
+最新NW接收包装后的集成回归。
+证据：loader/macos/evidence/lua-http-request-cancellation-runtime.json。

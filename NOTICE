@@ -1,0 +1,11 @@
+SV2 Extend — GPL-3.0-only.
+
+nlohmann/json 3.11.3 — MIT License.
+See loader/windows/vendor/JSON-LICENSE.MIT.
+
+rxi/json.lua — Copyright (c) 2020 rxi, MIT License.
+License headers are retained in plugins/sv2-mcp/host/vendor/json.lua
+and plugins/lua-extend/lua/sv2_extend_json.lua.
+
+MinHook — BSD 2-Clause License, with bundled HDE notices.
+See loader/windows/vendor/minhook/LICENSE.txt.

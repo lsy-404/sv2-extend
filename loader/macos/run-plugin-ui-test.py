@@ -1,0 +1,7 @@
+from pathlib import Path
+import subprocess,json,uuid,os
+source=Path(__file__).resolve().parent;base=source.parents[3];work=base/'work/extend-sidebar';work.mkdir(exist_ok=True);binary=work/'registry-test';subprocess.run(['xcrun','clang','-fobjc-arc','-Wall','-Wextra','-Werror',str(source/'plugin_ui_test.m'),str(source/'plugin_ui.m'),'-framework','Foundation','-o',str(binary)],check=True);root=work/('registry-'+uuid.uuid4().hex);root.mkdir(mode=0o700);reports={}
+for mode in ['write','restore']:
+ p=subprocess.run([str(binary),str(root),mode],capture_output=True,text=True);reports[mode]=json.loads(p.stdout);assert p.returncode==0,p.stdout+p.stderr
+bad=work/('invalid-'+uuid.uuid4().hex);(bad/'preferences').mkdir(parents=True,mode=0o700);path=bad/'preferences/extend-ui.json';path.write_text('not json');before=path.read_bytes();p=subprocess.run([str(binary),str(bad),'invalid'],capture_output=True,text=True);reports['invalid']=json.loads(p.stdout);reports['invalid']['checks']['originalBytesPreserved']=path.read_bytes()==before;assert p.returncode==0,p.stdout+p.stderr
+report={'phases':reports,'passed':all(all(v['checks'].values()) for v in reports.values()),'scope':'Real resident registry API and profile JSON persistence across native processes; fake plugin events, no SV2 UI claim.'};(work/'registry-results.json').write_text(json.dumps(report,indent=2));print(json.dumps(report,indent=2));assert report['passed']

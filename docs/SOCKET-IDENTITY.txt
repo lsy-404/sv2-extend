@@ -1,0 +1,23 @@
+Socket 描述符身份修订（0.8.2）
+
+真实宿主 connection-group 诊断暴露本地 NSData 原子写入返回 ENETDOWN。
+独立 dyld 对照随后确认：socket 经未拦截的 close$NOCANCEL 关闭后，编号被普通文件、管道或 AF_UNIX socket 重用，旧 ip/revoked 记录仍被信任；即使恢复联网也可能继续错误拒绝本地 IO。
+另一个对照确认：未连接 UDP socket 被撤销后，经 fcntl 派生的新别名在解除阻断后丢失撤销状态，旧实现 sendto 返回成功。
+
+修订
+- 每次受控 IO 先 fstat 当前描述符；非 socket 清除旧跟踪，不再按旧编号误拦本地读写。
+- 使用公开 proc_pidfdinfo(PROC_PIDFDSOCKETINFO) 的 soi_so 不透明句柄核对当前 socket 身份，不向 API/日志暴露句柄。
+- 未拦截 fcntl 创建的别名通过同一仍有效的 socket 身份继承 scope、connected 和 revoked；旧记录的来源描述符也须重新核对。
+- 阻断、活动统计和 dup 路径同样刷新身份，避免对已关闭/已复用对象使用旧记录。
+- 这是对象身份修正，不是任意并发 close/reuse 与 IO 之间竞态的整体证明。内核身份读取不可用时使用保守作用域，不据此放行全宿主静默验证。
+
+证据
+- work/socket-identity/results.json：修订前 7 项均失败，修订后均通过。包含真实 close$NOCANCEL 及 fcntl 系统入口，不是模拟描述符表。
+- run-socket-identity-test.py：可重现当前 7 项。
+- 真实 SV2 新核心：Network.framework 28 项、传输矩阵 35 项通过；允许、阻断、恢复和原生异步回调行为保留。
+- 相同 group 诊断在新核心中成功保存报告，旧核心保存失败；group 的 payload transport 对照仍无效，不能计为 group 覆盖通过。
+
+仍未完成
+connection group 的发送对照未产生有效载荷/完成回调；含接收器时遇到地址占用，移除接收器后只能确认组 ready，不能证明发送路径。
+私有 NW、更多 group/multiplex/QUIC、后台/进程外路径仍待完成。
+whole_host_verified 保持 0，verify_host_network_quiescence 仍返回 NETWORK_UNVERIFIED。

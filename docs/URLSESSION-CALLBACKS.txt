@@ -1,0 +1,31 @@
+Extend 0.6.2：NSURLSession 任务与应用回调排空
+
+已修复的实际问题
+0.6.1 的 task.state==completed 不代表应用回调已经执行。真实后台下载测试暂停了 delegate 队列：任务已完成，但原 tracked_tasks_drained 仍为真。全宿主 verify 当时仍返回 NETWORK_UNVERIFIED，没有把该计数用于实际账号替换。
+
+0.6.2 行为
+- NSURLSession 工厂创建任务时注册内存 token，resume 时登记待交付回调。
+- completion block 在原应用函数返回后才确认；delegate didCompleteWithError 同样等待原函数返回。
+- 父/子 delegate 调用 super 时避免提前确认；子类完整返回后才清除。
+- task.state 完成但 delegate 队列暂停、或 completion block 正执行时，tracked_tasks_drained 保持为假。
+- 原始数据、错误对象、原 delegate 身份、系统后台配置保持原样。只记录随机 token 与状态，不保存请求体、账号或 session 内容。
+- 没有引入外部常驻管理进程；诊断服务器及诊断插件不进入交付包。
+
+真实验证
+安装版核心 34 项检查通过：后台下载允许/阻断/恢复；有实际进度且仍运行的下载被取消，服务端观察连接关闭；delegate 排队；completion block 排队/执行；继承 delegate 父方法已返回而子方法未返回；转发 delegate 的原回调仍收到。
+网络回归另通过本地三阶段 35 项、受信任 HTTPS 三阶段 35 项及 NW 专项 17 项。安装入口 17 项检查保留官方程序签名与哈希。
+
+边界
+NSProxy/自定义转发 delegate、未识别的任务工厂、并发 delegate 队列或跟踪容量超限，不声明回调已完全覆盖：保持保守的不确定标记。出现该标记后，本次宿主进程不签发排空成功；重启会重建跟踪。
+本实现只确认受控回调函数已返回，不能据此证明回调自行安排的延后工作也全部结束。
+已验证真实后台 download，未因此声称所有 background upload、恢复数据、退出/重启后的后台服务或系统私有路径均封闭。
+whole_host_verified 继续为 0，verify_host_network_quiescence 仍返回 NETWORK_UNVERIFIED。
+
+证据
+- evidence/background-session-before-callback-tracking.json：修复前的提前排空证据。
+- evidence/urlsession-callback-installed-0.6.2.json：最终安装核心 34 项。
+- evidence/urlsession-callback-transport-regression.json / urlsession-callback-https-regression.json / urlsession-callback-nw-regression.json。
+- evidence/installed-loader-0.6.2-runtime.json。
+
+重现
+build.sh 构建不打包的 urlsession-callback-plugin.dylib；设置 LOADER_PROBE_DIRECT_HOST 为自有测试宿主原始可执行文件，LOADER_PROBE_LIBRARY 为待测核心，运行 run-urlsession-callback-probe.py。脚本停止它本次创建的空白进程，不操作已有用户工程。

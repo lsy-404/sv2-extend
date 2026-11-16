@@ -1,0 +1,46 @@
+Extend Loader 数据目录与托管宿主
+
+已安装入口：~/Applications/Extend Loader.app
+直接打开会验证官方应用签名，自动准备或复用隔离副本，然后通过 exec 转入宿主。生产运行时驻留 SV2，不保留外部管理进程。官方安装不改签；托管副本使用本地 ad hoc 签名。原版应用名称、窗口标题和图标保留，内部缓存目录名不作为展示标题。
+
+目录选择
+默认 Loader 数据目录是 ~/Library/Application Support/Dreamtonics/Open SV2 Loader，位于原版 Synthesizer V Studio 2 数据目录旁边。“旁置”指数据目录位置，不要求把程序放进原版安装目录。也可选择其他独立目录。
+
+按住 Option 启动 Loader 可打开设置，或执行：
+"$HOME/Applications/Extend Loader.app/Contents/MacOS/ExtendLoader" --settings --configure-only
+设置包含官方应用位置、Loader 数据目录、是否隔离宿主应用数据，以及 Lua/JS 的本地和在线 HTTP 权限。设置用于后续启动；切换目录前应退出使用原目录的受管宿主。
+
+可用参数：
+--data-dir /absolute/profile：选择目录
+--alongside-data：选择默认旁置目录
+--isolate-host-data：启用隔离宿主应用数据
+--legacy-host-data：保留使用原版宿主应用数据的兼容模式
+--prepare-only：仅准备托管副本，不启动宿主
+--status：读取当前所选设置
+
+宿主数据
+全新配置默认开启“隔离宿主应用数据（保留原版数据）”。已有配置继续遵循自身设置；旧配置缺少隔离字段时保持兼容模式，不静默改变其数据来源。旁置/独立位置和是否隔离宿主数据是两个不同设置。
+
+启用隔离后，Loader 首次将原版 settings、databases、dicts、scripts、server-translations、license 目录作为不透明数据复制到选定目录的 host-home 下，不解析其中的账号字段。源目录保留，包含符号链接的树被拒绝。已有 host-home 必须有 Loader 的准备标记，否则拒绝覆盖；中断的暂存目录也保留。宿主数据 namespace 当前仅在已验证的 SV2 2.3.0 arm64 原生适配上接入；不能将其他架构的编译成功当作数据隔离验证。
+
+隔离 profile 由路径派生独立宿主 bundle identifier，并据此配置 WebKit 数据身份。扩展可通过版本化 API 读取借用的原生应用数据目录。项目文件仍由用户选择打开/保存，不自动搬移或覆盖工程。
+
+主要内容
+settings.json：此 profile 的 Loader 配置
+host-home/：隔离宿主数据及准备标记
+plugins/：独立插件包及旧版原型数据
+plugin-data/：按插件 ID 隔离的新 SDK 状态，升级/卸载包时保留
+plugin-pending/、plugin-removals/、plugin-transactions/：重启应用的插件事务
+plugin-backups/、backups/：插件及配置备份
+preferences/：扩展设置、启动联网恢复 guard
+logs/、cache/：运行日志和缓存
+runtimes/<资源指纹>/SV2 Extended.app：受管副本和 receipt
+.profile-host.lock：宿主共享/账号事务独占的内核租约文件
+
+切换和迁移
+选择没有 settings.json 的新目录时，复制 plugins、plugin-data、插件事务/备份、preferences、logs、cache、host-home，旧目录保留；受管运行时在新目录生成。目的地有同名待迁移数据时拒绝覆盖。选择已有且配置匹配的 profile 会直接启用它，不合并另一 profile 的数据。嵌套迁移和使用官方应用/原版数据目录作为 Loader 根目录均被拒绝。macOS 偏好设置只保存所选目录的位置指针。
+
+保护和验证范围
+已实际验证：不同目录准备/启动、原目录保留、冲突拒绝、存储身份、宿主内模块与同 PID exec、已安装入口读取工程/声库及原生导出可用性。平台和数据路径原生适配有版本限制；x86_64 尚无真实宿主验收。
+
+全宿主网络覆盖状态见 NETWORK-STATUS.md。持久恢复 guard 不能因插件缺失或初始化失败被静默忽略；必需早期插件无法接入时拒绝宿主初始化。插件安装/启停/更新/删除在 Extend 控制面板；脚本面板底部仅提供重新打开 Extend 的入口。

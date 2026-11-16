@@ -1,0 +1,17 @@
+**/build/
+**/__pycache__/
+*.pyc
+*.dylib
+*.dll
+*.exe
+*.o
+*.app/
+.DS_Store
+/work/
+/outputs/
+/test/.outputs/
+/loader/macos/loader-launcher
+/loader/macos/fixture
+/loader/macos/sideloader
+/loader/macos/task-port-probe
+/loader/macos/evidence/
