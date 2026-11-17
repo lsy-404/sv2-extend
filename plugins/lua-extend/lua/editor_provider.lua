@@ -37,17 +37,17 @@ local function selected(identifier)
     assert(type(identifier)=='string' and #identifier>0 and #identifier<=128,'Invalid group UUID')
     local project=SV:getProject();local group=project:getNoteGroup(identifier)
     if not group then error({code='GROUP_NOT_FOUND'}) end
-    local match,count=nil,0
+    local match,owner,count=nil,nil,0
     for t=1,project:getNumTracks() do local track=project:getTrack(t)
       for g=1,track:getNumGroups() do local ref=track:getGroupReference(g);local target=ref:getTarget()
-        if target and target:getUUID()==identifier then if not match then match=ref end;count=count+1 end
+        if target and target:getUUID()==identifier then if not match then match=ref;owner=track end;count=count+1 end
       end
     end
     if count==0 then error({code='GROUP_REFERENCE_NOT_FOUND'}) end
-    return match,group
+    return match,group,owner,count
   end
   local reference=SV:getMainEditor():getCurrentGroup();assert(reference,'No current note group')
-  local group=reference:getTarget();assert(group,'No current note group target');return reference,group
+  local group=reference:getTarget();assert(group,'No current note group target');return reference,group,SV:getMainEditor():getCurrentTrack(),1
 end
 local function guard(group)
   local notes={}
@@ -75,12 +75,11 @@ local function voiceSnapshot(reference)
   assert(identity, failure and failure.code or 'Voice identity unavailable')
   return parameters, identity
 end
-local function currentVoice(reference,group)
+local function currentVoice(reference,group,track)
   local _, raw=voiceSnapshot(reference)
   assert(raw,'VOICE_NATIVE_ADAPTER_UNAVAILABLE')
   local identity=raw;local inherited=false
   if not identity.assigned then
-    local track=SV:getMainEditor():getCurrentTrack()
     if track then local _, main=voiceSnapshot(track:getGroupReference(1));if main.assigned then identity=main;inherited=true end end
   end
   return {voicebank=identity,inherited=inherited,groupUUID=group:getUUID(),guard=json.encode({epoch,SV:getProject():getFileName(),group:getUUID(),raw.referenceKey,raw.identityKey,identity.identityKey,inherited})},raw
@@ -125,10 +124,11 @@ local function invoke(method,args)
       if target and target:getUUID()==args.groupUUID then error({code='MAIN_GROUP_EDIT_UNSUPPORTED'}) end
     end
   end
-  local reference,group=selected(args.groupUUID)
-  if method=='voicebanks.current' then return currentVoice(reference,group) end
+  local reference,group,track,referenceCount=selected(args.groupUUID)
+  if (method=='voicebanks.current' or method=='voicebanks.select') and referenceCount~=1 then error({code='GROUP_REFERENCE_AMBIGUOUS'}) end
+  if method=='voicebanks.current' then return currentVoice(reference,group,track) end
   if method=='voicebanks.select' then
-    local before,raw=currentVoice(reference,group)
+    local before,raw=currentVoice(reference,group,track)
     if type(args.guard)~='string' or args.guard~=before.guard then error({code='STALE_VOICE_GUARD'}) end
     local target=nativeResult('voice.select.validate',{voicebankId=args.voicebankId})
     if target.identityKey==before.voicebank.identityKey then before.undoRecordCreated=false;return before end
@@ -138,7 +138,7 @@ local function invoke(method,args)
     local completed,failed=extend.request('voice.select.end',{token=scope.token})
     if not ok then error({code='VOICE_GETTER_FAILED',message=tostring(why)}) end
     if not completed then error(failed or {code='VOICE_NATIVE_CALL_FAILED'}) end
-    local after=currentVoice(reference,group)
+    local after=currentVoice(reference,group,track)
     if after.voicebank.identityKey~=target.identityKey then error({code='VOICE_CONTEXT_CHANGED_AFTER_SELECTION'}) end
     after.undoRecordCreated=completed.undoRecordCreated;return after
   end
@@ -214,7 +214,7 @@ end
 local function handle(request)
   assert(request.epoch==epoch,'Host epoch changed');assert(type(request.expires)=='number' and os.time()<=request.expires,'REQUEST_EXPIRED')
   assert(type(request.method)=='string' and type(request.arguments)=='table','Invalid editor request')
-  local allowed={['exports.start']={guard=true,outputPath=true,channels=true,sampleRate=true,bitDepth=true},['exports.status']={jobId=true},['exports.cancel']={jobId=true},['voicebanks.select']={voicebankId=true,guard=true},['selection.read']={groupUUID=true},['groups.create']={name=true,guard=true},['groups.remove']={groupUUID=true,guard=true},['notes.set_pitch']={groupUUID=true,noteIndex=true,midiPitch=true,guard=true},['pitch.read_range']={groupUUID=true,startBlick=true,endBlick=true},['pitch.replace_range']={groupUUID=true,startBlick=true,endBlick=true,points=true,guard=true,curveGuard=true}}
+  local allowed={['exports.start']={guard=true,outputPath=true,channels=true,sampleRate=true,bitDepth=true},['exports.status']={jobId=true},['exports.cancel']={jobId=true},['voicebanks.current']={groupUUID=true},['voicebanks.select']={voicebankId=true,guard=true,groupUUID=true},['selection.read']={groupUUID=true},['groups.create']={name=true,guard=true},['groups.remove']={groupUUID=true,guard=true},['notes.set_pitch']={groupUUID=true,noteIndex=true,midiPitch=true,guard=true},['pitch.read_range']={groupUUID=true,startBlick=true,endBlick=true},['pitch.replace_range']={groupUUID=true,startBlick=true,endBlick=true,points=true,guard=true,curveGuard=true}}
   allowed['notes.add']={groupUUID=true,onsetBlick=true,durationBlick=true,midiPitch=true,lyrics=true,guard=true}
   allowed['notes.remove']={groupUUID=true,noteIndex=true,guard=true}
   for key in pairs(request.arguments) do assert((allowed[request.method] or {})[key],'Unknown argument') end
