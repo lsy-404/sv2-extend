@@ -12,6 +12,9 @@
 #define LOADER_CAP_WEB_CONTEXT_RETIREMENT (1ull << 8)
 #define LOADER_CAP_SCOPED_STORAGE (1ull << 9)
 #define LOADER_CAP_NETWORK_POLICY_SWITCH (1ull << 10)
+#define LOADER_CAP_HOST_NAVIGATION (1ull << 11)
+/* URL is borrowed for the callback; return 0 to pass, 1 to handle, or a negative value to reject. */
+typedef int (*loader_host_navigation_handler)(const char *url,void *context);
 /* Body is borrowed for this callback only; callback may run off the main thread. */
 typedef void (*loader_http_completion)(int32_t status, int32_t error, const uint8_t *body, size_t length, void *context);
 /* UI events are synchronous/main-thread, borrowed JSON. Never route account actions through MCP. */
@@ -152,6 +155,9 @@ typedef struct {
     int (*plugin_storage_read_scoped)(const char *plugin_id,const char *key,uint8_t *data,size_t *length);
     /* Applied policy is separate from tracked-task drainage and whole-host isolation. */
     int (*get_host_network_policy)(loader_network_policy_state_v1 *state);
+    /* Main-thread registration and callbacks; unregister before releasing context. */
+    int (*register_host_navigation_handler)(const char *owner_id,loader_host_navigation_handler handler,void *context);
+    int (*unregister_host_navigation_handler)(const char *owner_id,loader_host_navigation_handler handler,void *context);
 } loader_api_v1;
 /* Return zero on success. Loader owns dlopen handle until host shutdown. */
 typedef int (*loader_plugin_init_v1_fn)(const loader_api_v1 *api);

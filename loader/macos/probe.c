@@ -12,6 +12,9 @@
 #include <unistd.h>
 extern int network_gate_install(void);
 extern int loader_plugin_ui_install(void);
+extern int loader_host_navigation_install(void);
+extern int loader_register_host_navigation_handler(const char*,loader_host_navigation_handler,void*);
+extern int loader_unregister_host_navigation_handler(const char*,loader_host_navigation_handler,void*);
 extern void loader_load_plugin_packages(const loader_api_v1*);
 extern int loader_bootstrap_plugin_packages(const loader_bootstrap_api_v1*);
 extern int loader_register_plugin_ui(const char*,loader_plugin_ui_event,void*);
@@ -61,6 +64,7 @@ static void initialize(void *context) {
     if(getenv("LOADER_PROBE_BLOCK_HOST_AT_START") && !strcmp(getenv("LOADER_PROBE_BLOCK_HOST_AT_START"),"1"))network_gate_set(1);
     api = (loader_api_v1){ .abi_version=LOADER_ABI_V1, .struct_size=sizeof api, .capabilities=LOADER_CAP_HOST_URLSESSION_GATE|LOADER_CAP_PLUGIN_HTTP|LOADER_CAP_NETWORK_STATE, .host_pid=getpid(), .on_main_thread=pthread_main_np(), .host_executable=executable, .log=log_message, .set_host_network_blocked=network_gate_set, .host_network_blocked=network_gate_get, .plugin_http_get=network_gate_plugin_get, .get_host_network_state=network_gate_state, .verify_host_network_quiescence=network_gate_verify_quiescence, .plugin_storage_write=loader_plugin_storage_write, .register_editor_adapter=loader_register_editor_adapter, .editor_request_json=loader_editor_request, .listen_local_json=loader_listen_local_json, .unregister_editor_adapter=loader_unregister_editor_adapter, .register_capability_provider=loader_register_capability_provider, .unregister_capability_provider=loader_unregister_capability_provider, .request_capability_json=loader_editor_request, .host_data_directory=loader_host_data_directory, .register_plugin_ui=loader_register_plugin_ui, .unregister_plugin_ui=loader_unregister_plugin_ui, .update_plugin_ui=loader_update_plugin_ui, .stop_local_json=loader_stop_local_json, .set_startup_network_guard=loader_set_startup_network_guard, .get_startup_network_policy=loader_get_startup_network_policy, .list_startup_network_guards=loader_list_startup_network_guards, .acquire_profile_exclusive=loader_acquire_profile_exclusive, .release_profile_exclusive=loader_release_profile_exclusive, .get_profile_lease_state=loader_get_profile_lease_state, .retire_host_web_renderers=loader_retire_host_web_renderers, .retire_host_web_contexts=loader_retire_host_web_contexts, .plugin_storage_write_scoped=loader_plugin_storage_write_scoped, .plugin_storage_read_scoped=loader_plugin_storage_read_scoped };
     api.capabilities|=LOADER_CAP_SCOPED_STORAGE|LOADER_CAP_NETWORK_POLICY_SWITCH;api.get_host_network_policy=network_gate_policy;
+    if(loader_host_navigation_install()==LOADER_OK){api.capabilities|=LOADER_CAP_HOST_NAVIGATION;api.register_host_navigation_handler=loader_register_host_navigation_handler;api.unregister_host_navigation_handler=loader_unregister_host_navigation_handler;}
     if(loader_host_data_directory())api.capabilities|=LOADER_CAP_HOST_DATA_NAMESPACE;
     api.capabilities|=LOADER_CAP_STARTUP_NETWORK_GUARD;loader_profile_lease_state_v1 lease={.abi_version=LOADER_ABI_V1,.struct_size=sizeof lease};if(loader_get_profile_lease_state(&lease)==LOADER_OK)api.capabilities|=LOADER_CAP_PROFILE_LEASE;
     if(loader_web_retirement_supported())api.capabilities|=LOADER_CAP_WEB_RENDERER_RETIREMENT;

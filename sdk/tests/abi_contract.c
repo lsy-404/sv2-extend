@@ -15,7 +15,9 @@ _Static_assert(offsetof(loader_api_v1,plugin_storage_write_scoped)==248,"scoped 
 _Static_assert(offsetof(loader_api_v1,plugin_storage_read_scoped)==256,"scoped read ABI drift");
 _Static_assert(offsetof(loader_api_v1,get_host_network_policy)==264,"network policy ABI drift");
 _Static_assert(sizeof(loader_network_policy_state_v1)==32,"network policy state ABI drift");
-_Static_assert(sizeof(loader_api_v1)==272,"append-only API drift: update compatibility test intentionally");
+_Static_assert(offsetof(loader_api_v1,register_host_navigation_handler)==272,"navigation register ABI drift");
+_Static_assert(offsetof(loader_api_v1,unregister_host_navigation_handler)==280,"navigation unregister ABI drift");
+_Static_assert(sizeof(loader_api_v1)==288,"append-only API drift: update compatibility test intentionally");
 const char *extend_abi_platform(void){return loader_platform_key();}
 
 _Static_assert(sizeof(loader_startup_network_state_v1)==32,"startup policy ABI drift");
