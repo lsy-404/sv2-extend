@@ -2,9 +2,12 @@
 #include <windows.h>
 #include <taskschd.h>
 #include <netfw.h>
+#include "network_firewall.h"
 #include <string>
 #include <thread>
 #include <mutex>
+#include <condition_variable>
+#include <chrono>
 #include <cstdint>
 
 namespace windows_network {
@@ -29,7 +32,11 @@ class Controller {
  std::mutex mutex_;
  State value_;
  std::thread worker_;
+ std::condition_variable wake_;
+ bool stopping_=false,monitor_ready_=false;
+ HRESULT monitor_error_=S_OK;
  std::wstring target_;
+ std::thread monitor_;
  static HRESULT run(bool block) {
   ComPtr<ITaskService> service;
   HRESULT hr=CoCreateInstance(task_class,nullptr,CLSCTX_INPROC_SERVER,task_interface,(void**)service.out()); if(FAILED(hr))return hr;
@@ -53,17 +60,20 @@ class Controller {
   if(modify!=NET_FW_MODIFY_STATE_OK)return HRESULT_FROM_WIN32(ERROR_ACCESS_DISABLED_BY_POLICY);
   long active=0;hr=policy->get_CurrentProfileTypes(&active);if(FAILED(hr))return hr;if(!active)return HRESULT_FROM_WIN32(ERROR_NOT_READY);
   for(long profile : {long(NET_FW_PROFILE2_DOMAIN),long(NET_FW_PROFILE2_PRIVATE),long(NET_FW_PROFILE2_PUBLIC)})if(active&profile){VARIANT_BOOL enabled=VARIANT_FALSE;hr=policy->get_FirewallEnabled((NET_FW_PROFILE_TYPE2)profile,&enabled);if(FAILED(hr))return hr;if(enabled!=VARIANT_TRUE)return HRESULT_FROM_WIN32(ERROR_NOT_READY);}
-  ComPtr<INetFwRules> rules;hr=policy->get_Rules(rules.out());if(FAILED(hr))return hr;
-  Bstr name(L"SV2 Extend Managed Host Outbound");ComPtr<INetFwRule> rule;hr=rules->Item(name.p,rule.out());if(FAILED(hr))return hr;
-  BSTR app=nullptr,group=nullptr;VARIANT_BOOL enabled=VARIANT_FALSE;NET_FW_ACTION action;NET_FW_RULE_DIRECTION direction;long profiles=0,protocol=0;
-  bool valid=SUCCEEDED(rule->get_ApplicationName(&app)) && app && _wcsicmp(app,target.c_str())==0 &&
-   SUCCEEDED(rule->get_Grouping(&group)) && group && _wcsicmp(group,L"SV2 Extend Managed Host")==0 &&
-   SUCCEEDED(rule->get_Enabled(&enabled)) && (enabled==VARIANT_TRUE)==block &&
-   SUCCEEDED(rule->get_Action(&action)) && action==NET_FW_ACTION_BLOCK &&
-   SUCCEEDED(rule->get_Direction(&direction)) && direction==NET_FW_RULE_DIR_OUT &&
-   SUCCEEDED(rule->get_Profiles(&profiles)) && profiles==NET_FW_PROFILE2_ALL &&
-   SUCCEEDED(rule->get_Protocol(&protocol)) && protocol==256;
-  SysFreeString(app);SysFreeString(group);return valid?S_OK:HRESULT_FROM_WIN32(ERROR_INVALID_DATA);
+  ComPtr<INetFwRule> rule;hr=windows_firewall::find(policy.p,target,rule.out());if(FAILED(hr))return hr;
+  VARIANT_BOOL enabled=VARIANT_FALSE;hr=rule->get_Enabled(&enabled);if(FAILED(hr))return hr;
+  return ((enabled==VARIANT_TRUE)==block)?S_OK:HRESULT_FROM_WIN32(ERROR_INVALID_DATA);
+ }
+ void monitor(){
+  HRESULT initialized=CoInitializeEx(nullptr,COINIT_MULTITHREADED);
+  std::unique_lock<std::mutex> lock(mutex_);monitor_ready_=true;monitor_error_=initialized;wake_.notify_all();if(FAILED(initialized))return;
+  while(!stopping_){
+   if(wake_.wait_for(lock,std::chrono::seconds(2),[this]{return stopping_;}))break;
+   if(value_.pending||!value_.policy_applied)continue;
+   auto generation=value_.generation;bool blocked=value_.applied_blocked;lock.unlock();HRESULT hr=readback(blocked,target_);lock.lock();
+   if(FAILED(hr)&&!value_.pending&&value_.generation==generation){value_.policy_applied=false;value_.verified=false;value_.error=hr;}
+  }
+  lock.unlock();CoUninitialize();
  }
  void execute(uint64_t generation,bool block){
   HRESULT initialized=CoInitializeEx(nullptr,COINIT_MULTITHREADED);HRESULT result=initialized;
@@ -74,11 +84,19 @@ class Controller {
   if(SUCCEEDED(result)){value_.policy_applied=true;value_.applied_blocked=block;}
  }
 public:
- explicit Controller(std::wstring target):target_(std::move(target)){}
+ explicit Controller(std::wstring target):target_(std::move(target)),monitor_([this]{monitor();}){std::unique_lock<std::mutex> lock(mutex_);wake_.wait(lock,[this]{return monitor_ready_;});}
  Controller(const Controller&)=delete;Controller& operator=(const Controller&)=delete;
- ~Controller(){if(worker_.joinable())worker_.join();}
+ ~Controller(){{std::lock_guard<std::mutex> lock(mutex_);stopping_=true;}wake_.notify_all();if(worker_.joinable())worker_.join();if(monitor_.joinable())monitor_.join();}
+ bool adopt(bool blocked){
+  std::unique_lock<std::mutex> lock(mutex_);if(value_.pending)return false;if(FAILED(monitor_error_)){value_.error=monitor_error_;return false;}if(worker_.joinable())worker_.join();
+  auto generation=++value_.generation;value_.requested_blocked=blocked;value_.pending=true;value_.policy_applied=false;value_.verified=false;lock.unlock();
+  HRESULT initialized=CoInitializeEx(nullptr,COINIT_APARTMENTTHREADED);bool changed=initialized==RPC_E_CHANGED_MODE;
+  HRESULT result=SUCCEEDED(initialized)||changed?readback(blocked,target_):initialized;if(SUCCEEDED(initialized))CoUninitialize();
+  lock.lock();if(value_.generation!=generation)return false;value_.pending=false;value_.error=result;
+  if(SUCCEEDED(result)){value_.policy_applied=true;value_.applied_blocked=blocked;}return SUCCEEDED(result);
+ }
  bool request(bool blocked){
-  std::unique_lock<std::mutex> lock(mutex_);if(value_.pending)return false;
+  std::unique_lock<std::mutex> lock(mutex_);if(value_.pending)return false;if(FAILED(monitor_error_)){value_.error=monitor_error_;return false;}
   if(worker_.joinable())worker_.join();
   value_.generation++;value_.requested_blocked=blocked;value_.pending=true;value_.policy_applied=false;
   value_.host_connections_drained=false;value_.child_scope=false;value_.error=0;
