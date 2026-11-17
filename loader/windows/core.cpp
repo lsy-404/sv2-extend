@@ -44,7 +44,7 @@ std::unique_ptr<voice_service::Service> native_voice;
 std::unique_ptr<export_service::Service> native_export;
 std::unique_ptr<profile_lease::Service> profile_operations;
 std::unique_ptr<startup_policy::Service> startup_network;
-std::unique_ptr<windows_network::Controller> network_controller;
+windows_network::Controller* network_controller=nullptr;
 windows_network::State bootstrap_network_state;bool network_initialization_attempted=false;windows_webview_startup::Proof early_web_proof;
 windows_web_retirement::Service web_retirement;bool web_retirement_polling=false;
 script_settings::Runtime lua_runtime{&api,"opensv2.lua-extend","Lua Extend",false},js_runtime{&api,"opensv2.javascript-extend","JS Extend",false};
@@ -134,7 +134,7 @@ LRESULT CALLBACK window_proc(HWND window,UINT message,WPARAM w,LPARAM l){if(mess
 void network_tick(){
  if(managed&&!network_initialization_attempted&&editor_autostart::root_ready()){
   network_initialization_attempted=true;
-  try{auto host=fs::u8path(executable).wstring();network_controller=std::make_unique<windows_network::Controller>(host,bootstrap_network_state.generation);network_controller->adopt(bootstrap_network_state.requested_blocked);}
+  try{auto host=fs::u8path(executable).wstring();network_controller=windows_network::make_resident_controller(reinterpret_cast<const void*>(&network_tick),host,bootstrap_network_state.generation);if(!network_controller)throw std::runtime_error("resident module unavailable");network_controller->adopt(bootstrap_network_state.requested_blocked);}
   catch(const std::exception&){bootstrap_network_state.policy_applied=false;bootstrap_network_state.error=LOADER_ERR_NETWORK_UNVERIFIED;log_message("network-controller-initialization-failed");}
  }
  if(network_controller){auto state=network_controller->state();if(state.policy_applied&&!state.pending&&!state.error&&!state.requested_blocked&&!state.applied_blocked){windows_socket_gate::setblocked(false);windows_child_gate::setblocked(false);windows_webview_gate::setblocked(false);}}
@@ -244,6 +244,7 @@ void loader_category_after_root(){if(managed&&on_main()){if(!SetTimer(dispatcher
 void loader_category_cleanup_root(){if(managed&&on_main())native_category_registry::set_host(nullptr);}
 extern "C" __declspec(dllexport) int ExtendInitialize(void*){
  if(dispatcher)return main_thread==GetCurrentThreadId()?0:LOADER_ERR_INVALID;
+ if(!windows_network::pin_resident_module(reinterpret_cast<const void*>(&network_tick)))return LOADER_ERR_INVALID;
  windows_webview_startup::Proof::Scope early_scope(early_web_proof);
  app_container=token_is_app_container();managed=flag_enabled(L"OPEN_SV2_WINDOWS_MANAGED");if(managed&&app_container)return LOADER_ERR_NOT_SUPPORTED;if(!managed&&!flag_enabled(L"OPEN_SV2_WINDOWS_FIXTURE"))return LOADER_ERR_NOT_SUPPORTED;
  main_thread=GetCurrentThreadId();if(!read_path(L"OPEN_SV2_LOADER_DATA_DIR",root))return LOADER_ERR_STORAGE_NOT_CONFIGURED;if(!regular(root,true))return LOADER_ERR_INVALID;if(!plugin_storage::install(root))return LOADER_ERR_STORAGE_IO;

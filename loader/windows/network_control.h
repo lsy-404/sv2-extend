@@ -119,4 +119,12 @@ public:
  }
  State state(){std::lock_guard<std::mutex> lock(mutex_);return value_;}
 };
+inline bool pin_resident_module(const void* address){
+ HMODULE module=nullptr;
+ return address&&GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS|GET_MODULE_HANDLE_EX_FLAG_PIN,reinterpret_cast<LPCWSTR>(address),&module)!=FALSE;
+}
+inline Controller* make_resident_controller(const void* address,std::wstring target,uint64_t generation=0){
+ if(!pin_resident_module(address))return nullptr;
+ return new Controller(std::move(target),generation);
+}
 }
