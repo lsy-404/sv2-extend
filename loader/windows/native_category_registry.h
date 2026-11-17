@@ -35,6 +35,9 @@ using OwnsChild = bool (*)(void *, void *);
 static DockUpdate dock_update;
 static DockRemove dock_remove;
 static OwnsChild owns_child;
+static void (*scripts_update)(void *,const RECT &,bool);
+static void (*scripts_remove)(void *);
+[[maybe_unused]] static void set_scripts_callbacks(void (*update)(void *,const RECT &,bool),void (*remove)(void *)){scripts_update=update;scripts_remove=remove;}
 static HWND host_window;
 static std::set<void *> panes;
 static std::set<void *> bars;
@@ -128,7 +131,10 @@ static bool pane_bounds(void *pane, HWND host, RECT &result, bool &showing) {
 static void update_pane(void *pane) {
  if (!prepared) return;
  auto category = pane_category(pane);
- if (!category) return;
+ if (!category) {
+  auto bytes=static_cast<unsigned char*>(pane);void *model=nullptr,*table=nullptr;if(!readable(bytes,0x148))return;std::memcpy(&model,bytes+0x140,sizeof model);if(!readable(model,sizeof(void*)))return;std::memcpy(&table,model,sizeof table);if(table!=image+0x14eaca0||!scripts_update||!host_window||!IsWindow(host_window))return;
+  bool showing=true;RECT rect{};if(pane_bounds(pane,host_window,rect,showing))scripts_update(pane,rect,showing);return;
+ }
  panes.insert(pane);
  if (!dock_update || !host_window || !IsWindow(host_window)) return;
  auto bytes = static_cast<unsigned char *>(pane);
@@ -162,6 +168,7 @@ static void pane_resized(void *pane) {
 }
 static void *pane_destroy(void *pane, unsigned flags) {
  if (panes.erase(pane) && dock_remove) dock_remove(pane);
+ if (scripts_remove) scripts_remove(pane);
  return reinterpret_cast<void *(*)(void *, unsigned)>(image + 0xbd8090)(pane, flags);
 }
 static bool release_string(void *value) {
@@ -460,7 +467,7 @@ static bool sync(const Entry *entries, size_t count, bool root_visible) {
  }
  for (size_t i = 0; i < count; ++i) if (!mapping[i]) {
   for (unsigned j = 1; j < capacity; ++j) {
-   if (claimed[j] || j == 1) continue;
+   if (claimed[j]) continue;
    bool live = false;
    for (void *pane : panes) if (pane_category(pane) == &categories[j]) { live = true; break; }
    bool retained = false;

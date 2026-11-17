@@ -26,15 +26,16 @@ bool editor_online(){return editor_service&&!editor_service->epoch.empty()&&GetT
 void log_message(const char *);
 void category_update(void *pane,const char *id,HWND window,const RECT &bounds,bool visible){native_panel::dock_update(pane,id,window,bounds,visible);}
 void category_remove(void *pane){native_panel::dock_remove(pane);}
-void category_sync(){
- if(!native_category_registry::prepared)return;auto snapshot=native_panel::categories();std::vector<native_category_registry::Entry> entries;entries.reserve(snapshot.size());for(const auto &entry:snapshot)entries.push_back({entry.id.c_str(),entry.title.c_str(),entry.visible});
- if(!native_category_registry::sync(entries.data(),entries.size(),true))log_message("native-category-sync-unavailable");
+bool category_sync_pending=false;
+bool category_sync(){
+ if(!native_category_registry::prepared)return true;auto snapshot=native_panel::categories();std::vector<native_category_registry::Entry> entries;entries.reserve(snapshot.size());for(const auto &entry:snapshot)entries.push_back({entry.id.c_str(),entry.title.c_str(),entry.visible});
+ bool was_pending=category_sync_pending;category_sync_pending=!native_category_registry::sync(entries.data(),entries.size(),native_panel::extend_visible());if(category_sync_pending&&!was_pending)log_message("native-category-sync-unavailable");return !category_sync_pending;
 }
 void category_tick(){
  if(!editor_autostart::root_ready())return;
  if(!native_panel::host||!IsWindow(native_panel::host))EnumThreadWindows(main_thread,native_panel::find_host,reinterpret_cast<LPARAM>(&native_panel::host));
  if(!native_panel::host||!IsWindow(native_panel::host))return;
- if(native_category_registry::prepared){native_category_registry::set_host(native_panel::host);native_category_registry::tick();}
+ if(native_category_registry::prepared){native_category_registry::set_host(native_panel::host);if(category_sync_pending)category_sync();native_category_registry::tick();}
  native_panel::diagnostic();
  auto state=native_category_registry::status();json entries=json::array();for(const auto &item:native_category_registry::categories)if(item.present){bool opened=false;bool known=native_category_registry::category_open(item.id,&opened)==0;entries.push_back({{"id",item.id},{"visible",item.visible},{"openKnown",known},{"open",known&&opened}});}auto body=json{{"hostPid",GetCurrentProcessId()},{"mainThreadId",main_thread},{"ready",state.ready},{"binding",native_category_registry::prepare_result},{"toolbarCount",state.toolbar_count},{"paneCount",state.pane_count},{"categories",entries}}.dump(2);static std::string previous;if(body==previous)return;
  std::ofstream output(root/L"outputs"/L"windows-category.json",std::ios::binary|std::ios::trunc);if(!output)return;output<<body;output.close();if(output)previous=body;
@@ -154,7 +155,7 @@ extern "C" __declspec(dllexport) int ExtendInitialize(void*){
  api.listen_local_json=listen;api.stop_local_json=stop;api.host_data_directory=host_data;api.register_plugin_ui=native_panel::register_ui;api.unregister_plugin_ui=native_panel::unregister_ui;api.update_plugin_ui=native_panel::update_ui;
  api.set_startup_network_guard=guard;api.get_startup_network_policy=policy;api.list_startup_network_guards=guards;api.acquire_profile_exclusive=lease;api.release_profile_exclusive=lease;api.get_profile_lease_state=lease_state;api.retire_host_web_renderers=retire_web;api.retire_host_web_contexts=retire_web;api.plugin_storage_write_scoped=storage_scoped;api.plugin_storage_read_scoped=storage_read;
  if(managed){editor_service=std::make_unique<editor_lua::Service>(&api);editor_gate_result=editor_gate::install(editor_service.get());if(editor_gate_result==LOADER_OK){auto entry=root/L"host-data"/L"Roaming"/L"Dreamtonics"/L"Synthesizer V Studio 2"/L"scripts"/L"opensv2-loader-runtime.lua";editor_start_result=editor_autostart::install(editor_service.get(),entry.c_str());}}
- native_panel::set_categories_changed(category_sync);native_panel::set_open_category(native_category_registry::open_category);
+ native_panel::set_categories_changed(category_sync);native_panel::set_open_category(native_category_registry::open_category);native_category_registry::set_scripts_callbacks(native_panel::scripts_update,native_panel::scripts_remove);
  load_packages();startup_receipt();log_message("windows-resident-ready");return 0;
 }
 extern "C" __declspec(dllexport) const loader_api_v1 *ExtendGetAPI(){return dispatcher?&api:nullptr;}

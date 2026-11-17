@@ -92,6 +92,8 @@ int main() {
  if (!sync(full, 32, true)) return 15;
  std::strcpy(ids[31], "replacement");
  if (!sync(full, 32, true)) return 16;
+ for(int i=0;i<32;++i)std::snprintf(ids[i],sizeof ids[i],"nonmcp.%d",i);
+ if(!sync(full,32,true))return 23;
  VirtualFree(image, 0, MEM_RELEASE); image = nullptr;
  DestroyWindow(host);
  std::puts("PASS: executable and protection failure guards, forwarding, pane identity and bounds, dynamic registration");
