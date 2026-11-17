@@ -17,7 +17,8 @@ hook_objects=[]
 for relative in ['buffer.c','hook.c','trampoline.c','hde/hde64.c']:
     obj=out/('minhook-'+Path(relative).stem+'.o');run('gcc','-O2','-c',source/'vendor/minhook/src'/relative,'-o',obj);hook_objects.append(obj)
 run('g++',*flags,'-shared',source/'core.cpp',source/'editor_gate.cpp',source/'editor_autostart.cpp',source/'javascript_gate.cpp',source/'voice_adapter.cpp',*hook_objects,'-o',out/'ExtendCore.dll','-luser32','-lgdi32','-ladvapi32','-lshell32','-lole32','-loleaut32','-liphlpapi','-lws2_32','-luuid','-lbcrypt','-Wl,--dynamicbase,--nxcompat')
-run('g++',*flags,'-municode',source/'launcher.cpp','-o',out/'ExtendLauncher.exe','-ladvapi32','-lshell32','-lole32','-loleaut32','-luuid','-lbcrypt','-Wl,--dynamicbase,--nxcompat')
+run('windres','-I',source,'-i',source/'launcher.rc','-o',out/'launcher-resource.o')
+run('g++',*flags,'-municode',source/'launcher.cpp',out/'launcher-resource.o','-o',out/'ExtendLauncher.exe','-ladvapi32','-lshell32','-lole32','-loleaut32','-luuid','-lbcrypt','-Wl,--dynamicbase,--nxcompat')
 run('g++',*flags,'-municode',source/'network_helper.cpp','-o',out/'network-helper.exe','-lshell32','-lole32','-loleaut32','-luuid','-Wl,--dynamicbase,--nxcompat')
 run('g++',*flags,'-municode',source/'fixture.cpp','-o',out/'ExtendFixture.exe','-luser32','-Wl,--dynamicbase,--nxcompat')
 (out/'namespace-host').mkdir(exist_ok=True)
