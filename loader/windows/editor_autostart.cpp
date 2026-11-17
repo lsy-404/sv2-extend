@@ -5,6 +5,7 @@
 #include <string>
 #include <atomic>
 
+void loader_export_set_root(void*);
 void loader_category_before_root();
 void loader_category_after_root();
 void loader_category_cleanup_root();
@@ -51,12 +52,12 @@ static void scan(void *value){
 }
 static void init_root(void *root,void *context){
  if(resident&&GetCurrentThreadId()==resident->thread)loader_category_before_root();
- originalInit(root,context);if(resident&&GetCurrentThreadId()==resident->thread){liveRoot.store(root);loader_category_after_root();}
+ loader_export_set_root(root);originalInit(root,context);if(resident&&GetCurrentThreadId()==resident->thread){liveRoot.store(root);loader_category_after_root();}
 }
 static void cleanup_root(void *root){
  void *expected=root;bool owned=liveRoot.compare_exchange_strong(expected,nullptr);
  if(owned&&resident&&GetCurrentThreadId()==resident->thread){
-  loader_category_cleanup_root();
+  loader_export_set_root(nullptr);loader_category_cleanup_root();
   ++generation;if(timer){KillTimer(nullptr,timer);timer=0;}manager=nullptr;candidate=nullptr;scanSeen=false;runRequested=false;initialScanRequested=false;
   resident->reset();
  }

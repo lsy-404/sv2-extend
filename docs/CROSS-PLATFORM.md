@@ -25,7 +25,7 @@
 
 `sdk/examples/hello_plugin.c` 是同一份 C 源码，已在 macOS 构建 arm64/x86_64 Mach-O，并交叉构建 Windows x64 PE。编译产物不等于 Windows 运行验证。
 
-公开 provider 的 MCP 工具名称必须使用 `svext_` 前缀，且引用该 provider 自己声明的方法。示例工具为 `svext_hello_greet`。使用 `sdk/examples/build_hello.py --platform macos-arm64 --platform macos-x86_64 --platform windows-x86_64 --out /absolute/path/hello.sv2ext` 生成单个多平台包。
+内置编辑器工具使用两平台一致的 `sv_` 名称。独立 provider 的 MCP 工具名称必须使用 `svext_` 前缀，且引用该 provider 自己声明的方法。示例工具为 `svext_hello_greet`。使用 `sdk/examples/build_hello.py --platform macos-arm64 --platform macos-x86_64 --platform windows-x86_64 --out /absolute/path/hello.sv2ext` 生成单个多平台包。
 
 ## 当前平台状态
 
@@ -35,17 +35,17 @@
 | 启动器拉起宿主并退出 | SV2 验证 | 官方 2.3.0 隔离副本实机验证 |
 | 宿主内 provider 注册/请求 | SV2 验证 | fixture 请求和正式宿主插件初始化验证 |
 | 动态原生右侧面板 | 2.3.0 arm64 宿主组件、设置读写和生命周期验证 | 官方 2.3.0 安装入口验证分类、停靠、显隐恢复和持久化；缩放及状态刷新已验证 |
-| MCP、Lua、JS 原生宿主接入 | SV2 验证 | MCP 与内部官方 Lua 后端已验证；JS 未适配 |
-| 声库、pitch、导出后端 | SV2 验证 | 音符组、音符与 pitch 已验证；声库及导出未适配 |
-| 托管数据目录重定向 | SV2 验证 | AppContainer 与主程序 Shell 路径重定向验证 |
-| 显式 WebKit 上下文回收 | 本机验证；不等于完整隔离 | NOT_SUPPORTED |
-| 完整联网隔离 | 尚未验证完整覆盖 | 尚未实现 |
+| MCP、Lua、JS 原生宿主接入 | SV2 验证 | 2.3.0 隔离宿主已验证 MCP、官方 Lua 与 JS 调用 |
+| 声库、pitch、导出后端 | SV2 验证 | 已验证音符组、pitch、声库选择及原生 WAV 混音 |
+| 托管数据目录重定向 | SV2 验证 | 托管主程序 Shell 路径重定向验证 |
+| 显式网页上下文回收 | WebKit 本机验证；不等于完整隔离 | WebView 上下文回收；renderer-only 返回 NOT_SUPPORTED |
+| 网络隔离验证 | 尚未验证完整覆盖 | 官方 2.3.0 受管宿主的受支持入口及 Job 范围内已验证 |
 
-Windows 支持 `--host <official-synthv-studio.exe> <profile-directory>`。启动器复制完整官方安装，迁移用户数据至独立 profile，原目录和已有数据目标保持原样；AppContainer 仅授予 SMBIOS 读取 capability，在 main 前加载 Core。直接导入和动态解析的 Roaming/Local Shell 查询都重定向至 profile。运行时与插件目录只读，host-data、outputs、preferences、storage 可写。同一 profile 的运行锁随宿主保持，重复启动被拒绝。官方目录的文件列表、大小或修改时间变化后，保留旧副本并更新受管程序。
+Windows 支持 `--host <official-synthv-studio.exe> <profile-directory>`。启动器复制完整官方安装，迁移用户数据至独立 profile，原目录和已有数据目标保持原样；受管宿主以当前用户权限运行，在 main 前加载 Core。直接导入和动态解析的 Roaming/Local Shell 查询都重定向至 profile。同一 profile 的运行锁随宿主保持，重复启动被拒绝。受管进程和子进程归属同一 Job，宿主可查询成员。官方目录的文件列表、大小或修改时间变化后，保留旧副本并更新受管程序。
 
-当前后端以离线模式运行，动态联网开发中。AppContainer 也限制对 profile 之外项目路径的访问。
+网络控制的覆盖范围以运行时状态为准；Windows 可切换阻断并恢复在线，验证覆盖官方 2.3.0 受支持导入、受管 Job 和完整防火墙规则。profile 路径重定向不限制对其他用户文件的访问。
 
-Windows MCP 服务驻留在 SV2 内。右侧工具栏接入宿主原生 Extend 分类及独立插件分类，面板内容由 SV 宿主组件渲染；插件通过声明式 UI API 提供内容。官方 2.3.0 隔离宿主已验证分类打开和关闭，以及实际屏幕缩放 100%→150%→100% 时的面板与字体尺寸；重复提交相同插件状态时焦点和滚动位置保持。客户端使用 `Native/Sv2Mcp.exe --endpoint Profile/outputs/mcp-endpoint.json` 建立 stdio 连接；该程序只转发 MCP，无常驻管理逻辑。内部官方 Lua 后端自动启动，用户无需运行脚本或使用 Lua 面板。入口有官方 2.3.0 的版本与字节校验，后端未就绪时不公布工具。
+Windows MCP 服务驻留在 SV2 内。右侧工具栏接入宿主原生 Extend 分类及独立插件分类，面板内容由跟随宿主停靠区域的原生 SV 组件渲染；插件使用相同的声明式 UI API，不直接使用宿主控件。官方 2.3.0 隔离宿主已验证分类打开和关闭，以及实际屏幕缩放 100%→150%→100% 时的面板与字体尺寸；重复提交相同插件状态时焦点和滚动位置保持。客户端使用 `Native/Sv2Mcp.exe --endpoint Profile/outputs/mcp-endpoint.json` 建立 stdio 连接；该程序只转发 MCP，无常驻管理逻辑。内部官方 Lua 后端自动启动，用户无需运行脚本或使用 Lua 面板。入口有官方 2.3.0 的版本与字节校验，后端未就绪时不公布工具。
 
 Windows 插件设置和右侧入口显隐保存在 profile 的 `preferences/windows-plugin-ui.json`；macOS 使用 `preferences/extend-ui.json`。两平台保持同一 SDK 契约，各自渲染面板内容。
 
@@ -53,7 +53,7 @@ macOS arm64 和 Windows x64 的插件面板均使用 SV 宿主组件。Extend �
 
 macOS 宿主组件面板已完成程序化的真实宿主检查，包括 Unicode 设置读写、窄面板重排、状态更新时保留草稿、入口持久化和控件销毁；截图及物理鼠标交互尚未完成验证。
 
-已在真实隔离宿主验证读取工程、创建普通音符组、添加与删除音符、音高及 pitchDelta 编辑、过期 guard 拒绝与测试内容清理。主组添加/删除音符会在调用原版前拒绝。声库选择和 WAV 导出尚未开放。
+已在真实隔离宿主验证读取工程、创建普通音符组、添加与删除音符、音高及 pitchDelta 编辑、过期 guard 拒绝与测试内容清理。主组添加/删除音符会在调用原版前拒绝。隔离宿主已通过声库身份读取和选择，以及 MCP、官方 Lua 和 JS 的原生 WAV 导出。工程声库清单和其他能力按运行时注册情况公布。
 
 ## Windows 开发构建
 
@@ -76,7 +76,25 @@ Windows 启动采用 suspended 主线程 + pre-start APC，代码在 `DllMain` �
 
 JSON 依赖固定为 nlohmann/json 3.11.3，Shell 与编辑器入口使用 MinHook；许可证随构建的 THIRD-PARTY-NOTICES.txt 提供。构建不会下载或分发官方 SV2。
 
-SDK 的 64 位 API 表现为 264 字节，新增 WebKit 上下文回收函数在尾部偏移 240；另有命名空间存储读写在偏移 248/256，旧字段位置保持。macOS arm64/x86_64 与 Windows x64 ABI 静态检查通过；Windows 官方隔离宿主已验证 Core、插件和原生分类面板。未实现的 API 继续返回 NOT_SUPPORTED。
+SDK 的 64 位 API 表长为 288 字节。profile 独占租约获取、释放和状态位于偏移 208、216、224；网页上下文回收位于 240，命名空间存储读写位于 248/256，网络策略状态位于 264，宿主导航处理器注册和注销位于 272/280；旧字段位置保持。消费者需检查表长、能力位和函数指针。`LOADER_CAP_HOST_NAVIGATION` 表示原生导航处理器接入：注册及回调在主线程，URL 仅在回调期间借用，返回 0 继续、1 已处理、负数拒绝。macOS 新增的 `NSWorkspace openURL:` 接入尚待真实宿主验证。网络策略已应用、连接已排空及整个宿主已隔离是不同条件。未实现的 API 返回 NOT_SUPPORTED。
+
+Windows 受管 profile 的独占租约按 owner 和操作标识管理；已有导出任务或原生渲染忙碌时拒绝获取，持有独占租约时拒绝新导出。租约协调受管操作，不表示宿主中所有模型任务均已静止。导航处理器最多注册 16 个，owner 不得重复；注销后不再回调。
+
+## 接口检查
+
+以下检查比较两平台内置 MCP 名称、方法与描述，并验证 Windows 注册和调用契约。需要 Python 3、MinGW-w64 和 Lua 运行时：
+
+```powershell
+python test/check_mcp_contract.py
+New-Item -ItemType Directory -Force test/.outputs
+g++ -std=c++17 -pthread test/windows_mcp_protocol.cpp -o test/.outputs/mcp-contract.exe
+./test/.outputs/mcp-contract.exe
+g++ -std=c++17 test/windows_editor_lua_service.cpp -lbcrypt -luser32 -o test/.outputs/editor-contract.exe
+./test/.outputs/editor-contract.exe
+lua test/script_voice_project_contract.lua
+```
+
+这些是接口和模拟工程检查。实际宿主版本、能力注册、声库授权、原生渲染与输出文件仍需在目标宿主验证。
 
 ## Windows 安装
 

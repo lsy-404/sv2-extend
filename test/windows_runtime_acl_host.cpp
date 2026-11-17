@@ -1,9 +1,0 @@
-#define WIN32_LEAN_AND_MEAN
-#include <windows.h>
-#include <shlobj.h>
-#include <filesystem>
-#include <fstream>
-#include <string>
-namespace fs=std::filesystem;
-static bool cycle(const fs::path& path){HANDLE f=CreateFileW(path.c_str(),GENERIC_READ|GENERIC_WRITE,0,nullptr,CREATE_NEW,FILE_ATTRIBUTE_NORMAL,nullptr);if(f==INVALID_HANDLE_VALUE)return false;DWORD n=0;char c='x',v=0;bool ok=WriteFile(f,&c,1,&n,nullptr)&&n==1&&SetFilePointer(f,0,nullptr,FILE_BEGIN)!=INVALID_SET_FILE_POINTER&&ReadFile(f,&v,1,&n,nullptr)&&n==1&&v=='x';CloseHandle(f);return DeleteFileW(path.c_str())&&ok;}
-int wmain(int argc,wchar_t**argv){if(argc!=2)return 64;PWSTR folder=nullptr;SHGetKnownFolderPath(FOLDERID_LocalAppData,0,nullptr,&folder);if(folder)CoTaskMemFree(folder);wchar_t exe[32768],profile[32768],data[32768];GetModuleFileNameW(nullptr,exe,32768);GetEnvironmentVariableW(L"OPEN_SV2_LOADER_DATA_DIR",profile,32768);GetEnvironmentVariableW(L"OPEN_SV2_HOST_DATA_DIR",data,32768);auto runtime=fs::path(exe).parent_path();bool runtimeWrite=cycle(runtime/L"new-file");bool runtimeDelete=DeleteFileW((runtime/L"delete.txt").c_str());bool rootWrite=cycle(fs::path(profile)/L"root-write");bool pluginWrite=cycle(fs::path(profile)/L"plugins"/L"new-file");bool pluginDelete=DeleteFileW((fs::path(profile)/L"plugins"/L"delete.txt").c_str());bool dataWrite=cycle(fs::path(data)/L"data-write");bool outputsWrite=cycle(fs::path(profile)/L"outputs"/L"outputs-write");bool preferencesWrite=cycle(fs::path(profile)/L"preferences"/L"preferences-write");bool storageWrite=cycle(fs::path(profile)/L"storage"/L"storage-write");std::string asset;{std::ifstream in{runtime/L"asset.txt"};in>>asset;}std::ofstream out{fs::path(argv[1])};out<<runtimeWrite<<" "<<runtimeDelete<<" "<<rootWrite<<" "<<pluginWrite<<" "<<pluginDelete<<" "<<dataWrite<<" "<<outputsWrite<<" "<<preferencesWrite<<" "<<storageWrite<<" "<<asset;out.close();Sleep(1000);return 0;}

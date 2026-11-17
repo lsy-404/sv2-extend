@@ -29,7 +29,7 @@ for attempt in range(1, 4):
     result = subprocess.run([str(args.launcher), '--host', str(args.host), str(args.profile)],
                             capture_output=True, text=True, encoding='utf-8', timeout=90, check=True)
     launch = json.loads(result.stdout)
-    assert launch['residentCore'] and launch['appContainer'] and not launch['fixtureOnly']
+    assert launch['residentCore'] and not launch['appContainer'] and not launch['fixtureOnly']
     pid = launch['hostPid']
     process = kernel.OpenProcess(0x100001 | 0x1000, False, pid)
     assert process
@@ -78,11 +78,11 @@ for attempt in range(1, 4):
         client.stdin.flush()
         while True:
             tools = request('tools/list', {})['tools']
-            if any(tool['name'] == 'svext_read_editor' for tool in tools):
+            if any(tool['name'] == 'sv_read_editor' for tool in tools):
                 break
             assert time.monotonic() < deadline, 'Editor did not become ready'
             time.sleep(.1)
-        editor = request('tools/call', {'name': 'svext_read_editor', 'arguments': {}})['structuredContent']
+        editor = request('tools/call', {'name': 'sv_read_editor', 'arguments': {}})['structuredContent']
         assert editor['ok'] and editor['result']['noteCount'] == 0
         assert json.loads(editor['result']['guard'])[1] == '', 'Only an unsaved fixture may be stopped'
         if abort_file.exists():

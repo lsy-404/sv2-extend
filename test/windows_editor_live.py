@@ -62,52 +62,52 @@ try:
     client.stdin.write(json.dumps({'jsonrpc': '2.0', 'method': 'notifications/initialized'}) + '\n')
     client.stdin.flush()
     tools = {item['name'] for item in request('tools/list', {})['tools']}
-    assert {'svext_read_editor', 'svext_add_note', 'svext_remove_note',
-            'svext_set_note_pitch', 'svext_create_group', 'svext_remove_group',
-            'svext_read_pitch_range', 'svext_set_pitch_curve'} <= tools, 'The real editor provider is not ready'
-    initial = tool('svext_read_editor', {})
+    assert {'sv_read_editor', 'sv_add_note', 'sv_remove_note',
+            'sv_set_note_pitch', 'sv_create_group', 'sv_remove_group',
+            'sv_read_pitch_range', 'sv_set_pitch_curve'} <= tools, 'The real editor provider is not ready'
+    initial = tool('sv_read_editor', {})
     context = json.loads(initial['guard'])
     assert initial['noteCount'] == 0 and context[1] == '', 'An empty unsaved test group is required'
-    rejected = tool('svext_add_note', {'guard': initial['guard'], 'onsetBlick': 0,
+    rejected = tool('sv_add_note', {'guard': initial['guard'], 'onsetBlick': 0,
                                      'durationBlick': 705600000, 'midiPitch': 60}, expect_error=True)
     assert rejected['error']['code'] == 'MAIN_GROUP_EDIT_UNSUPPORTED'
-    created_group = tool('svext_create_group', {'guard': initial['guard'], 'name': 'MCP verification'})['groupUUID']
-    initial = tool('svext_read_editor', {'groupUUID': created_group})
+    created_group = tool('sv_create_group', {'guard': initial['guard'], 'name': 'MCP verification'})['groupUUID']
+    initial = tool('sv_read_editor', {'groupUUID': created_group})
     assert not initial['isMain'] and initial['noteCount'] == 0
     group = created_group
-    added_note = tool('svext_add_note', {'groupUUID': group, 'guard': initial['guard'], 'onsetBlick': 0,
+    added_note = tool('sv_add_note', {'groupUUID': group, 'guard': initial['guard'], 'onsetBlick': 0,
                                        'durationBlick': 705600000, 'midiPitch': 60, 'lyrics': 'la'})
     added = True
-    after = tool('svext_read_editor', {'groupUUID': group})
+    after = tool('sv_read_editor', {'groupUUID': group})
     assert after['groupUUID'] == group and after['noteCount'] == 1
     assert after['notes'][0]['midiPitch'] == 60
-    stale = tool('svext_set_note_pitch', {'groupUUID': group, 'guard': initial['guard'], 'noteIndex': 1,
+    stale = tool('sv_set_note_pitch', {'groupUUID': group, 'guard': initial['guard'], 'noteIndex': 1,
                                         'midiPitch': 62}, expect_error=True)
     assert 'STALE_EDIT_GUARD' in json.dumps(stale)
-    tool('svext_set_note_pitch', {'groupUUID': group, 'guard': after['guard'], 'noteIndex': 1, 'midiPitch': 62})
-    changed = tool('svext_read_editor', {'groupUUID': group})
+    tool('sv_set_note_pitch', {'groupUUID': group, 'guard': after['guard'], 'noteIndex': 1, 'midiPitch': 62})
+    changed = tool('sv_read_editor', {'groupUUID': group})
     assert changed['groupUUID'] == group and changed['notes'][0]['midiPitch'] == 62
-    curve = tool('svext_read_pitch_range', {'groupUUID': group, 'startBlick': 0, 'endBlick': 705600000})
+    curve = tool('sv_read_pitch_range', {'groupUUID': group, 'startBlick': 0, 'endBlick': 705600000})
     points = [[0, 0], [352800000, 25]]
-    tool('svext_set_pitch_curve', {'groupUUID': group, 'startBlick': 0, 'endBlick': 705600000,
+    tool('sv_set_pitch_curve', {'groupUUID': group, 'startBlick': 0, 'endBlick': 705600000,
                                  'guard': curve['guard'], 'curveGuard': curve['curveGuard'], 'points': points})
-    assert tool('svext_read_pitch_range', {'groupUUID': group, 'startBlick': 0, 'endBlick': 705600000})['points'] == points
+    assert tool('sv_read_pitch_range', {'groupUUID': group, 'startBlick': 0, 'endBlick': 705600000})['points'] == points
     print('PASS: real MCP note creation, readback, stale rejection and pitch edit')
 finally:
     try:
         if added:
-            current = tool('svext_read_editor', {'groupUUID': group})
+            current = tool('sv_read_editor', {'groupUUID': group})
             assert current['groupUUID'] == group and current['noteCount'] == 1
             assert current['notes'][0]['onsetBlick'] == 0
             assert current['notes'][0]['durationBlick'] == 705600000
-            tool('svext_remove_note', {'groupUUID': group, 'guard': current['guard'], 'noteIndex': 1})
-            assert tool('svext_read_editor', {'groupUUID': group})['noteCount'] == 0
+            tool('sv_remove_note', {'groupUUID': group, 'guard': current['guard'], 'noteIndex': 1})
+            assert tool('sv_read_editor', {'groupUUID': group})['noteCount'] == 0
             print('PASS: the temporary note was removed')
         if created_group:
-            current = tool('svext_read_editor', {'groupUUID': created_group})
+            current = tool('sv_read_editor', {'groupUUID': created_group})
             assert current['noteCount'] == 0
-            tool('svext_remove_group', {'groupUUID': created_group, 'guard': current['guard']})
-            assert tool('svext_read_editor', {})['noteCount'] == 0
+            tool('sv_remove_group', {'groupUUID': created_group, 'guard': current['guard']})
+            assert tool('sv_read_editor', {})['noteCount'] == 0
             print('PASS: the temporary group was removed')
     finally:
         client.stdin.close()

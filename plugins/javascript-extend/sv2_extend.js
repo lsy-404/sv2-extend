@@ -71,6 +71,7 @@
         capabilities: function () { return request('runtime.capabilities'); },
         voicebanks: {
             current: function (callback) { return call('voicebanks.current', {}, callback); },
+            project: function (callback) { return call('voicebanks.project', {}, callback); },
             list: function (callback) { return call('voicebanks.list', {}, callback); },
             select: function (identifier, guard, callback) { return call('voicebanks.select', {voicebankId: identifier, guard: guard}, callback); }
         },

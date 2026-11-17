@@ -11,6 +11,9 @@
 #include <stdio.h>
 #include <errno.h>
 #include <unistd.h>
+extern "C" {
+#include "startup_policy.h"
+}
 #if defined(__arm64__)
 extern "C" void loader_export_return_trampoline(void);
 extern "C" {__attribute__((visibility("hidden"))) void (*loader_export_original_target)()=nullptr;}
@@ -55,11 +58,13 @@ static void finish(NSMutableDictionary *job,uintptr_t renderer){
 static NSDictionary *perform(void *closure){
  uintptr_t context=0,root=0,project=0,owner=0,renderer=0,rendererOwner=0,rendererProject=0;
  if(!readMemory((uintptr_t)closure+8,&context,8) || !readMemory(context+8,&root,8) || !readMemory(root+0x2b50,&project,8) || !readMemory(root+0x2ab8,&owner,8) || !readMemory(owner+0x1b0,&renderer,8) || !readMemory(renderer+0x10,&rendererOwner,8) || !readMemory(rendererOwner+0x1c0,&rendererProject,8) || rendererProject!=project)return failure(@"PROJECT_RENDERER_MISMATCH");
- NSString *key=projectKey(project);uint8_t busy=0,waiting=0;if(!readMemory(renderer+0x2e4a8,&busy,1) || !readMemory(renderer+0x2e4a9,&waiting,1))return failure(@"RENDER_STATE_UNREADABLE");
- NSString *kind=operation[@"operation"];
- if([kind isEqual:@"snapshot"]){guardToken=NSUUID.UUID.UUIDString;guardProject=key;guardTime=NSProcessInfo.processInfo.systemUptime;return success(@{@"guard":guardToken,@"guardLifetimeSeconds":@15,@"busy":@(busy!=0),@"pending":@(waiting!=0),@"formats":@[@"wav"],@"mixdown":@YES});}
+ NSString *key=projectKey(project);uint8_t busy=0,waiting=0,stopping=0;if(!readMemory(renderer+0x2e4a8,&busy,1) || !readMemory(renderer+0x2e4a9,&waiting,1) || !readMemory(renderer+0x2e4aa,&stopping,1) || busy>1 || waiting>1 || stopping>1)return failure(@"RENDER_STATE_UNREADABLE");
+ NSString *kind=operation[@"operation"];BOOL profileExclusive=NO;
+ if([kind isEqual:@"snapshot"]||[kind isEqual:@"start"]){loader_profile_lease_state_v1 lease={LOADER_ABI_V1,sizeof lease,0,0,0};if(loader_get_profile_lease_state(&lease)!=LOADER_OK || lease.host_pid!=getpid() || (lease.mode!=LOADER_PROFILE_LEASE_SHARED && lease.mode!=LOADER_PROFILE_LEASE_EXCLUSIVE))return failure(@"PROFILE_LEASE_UNAVAILABLE");profileExclusive=lease.mode==LOADER_PROFILE_LEASE_EXCLUSIVE;}
+ if([kind isEqual:@"snapshot"]){BOOL actual=busy||stopping||(activeJob&&!terminal(jobs[activeJob][@"state"]));guardToken=NSUUID.UUID.UUIDString;guardProject=key;guardTime=NSProcessInfo.processInfo.systemUptime;return success(@{@"guard":guardToken,@"guardLifetimeSeconds":@15,@"busy":@(actual||profileExclusive),@"actualExportBusy":@(actual),@"profileExclusive":@(profileExclusive),@"pending":@(waiting!=0),@"formats":@[@"wav"],@"mixdown":@YES});}
  NSDictionary *args=operation[@"arguments"];
  if([kind isEqual:@"start"]){
+  if(profileExclusive)return failure(@"PROFILE_BUSY");
   if(![args[@"guard"] isEqual:guardToken] || ![key isEqual:guardProject] || NSProcessInfo.processInfo.systemUptime-guardTime>15)return failure(@"STALE_EXPORT_GUARD");
   if(!busy && !waiting && activeJob && !terminal(jobs[activeJob][@"state"]) && [jobs[activeJob][@"projectKey"] isEqual:key])finish(jobs[activeJob],renderer);
   if(busy || (activeJob && !terminal(jobs[activeJob][@"state"])))return failure(@"RENDER_BUSY");

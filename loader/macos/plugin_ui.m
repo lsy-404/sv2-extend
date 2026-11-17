@@ -79,8 +79,8 @@ int loader_register_plugin_ui(const char *json,loader_plugin_ui_event event,void
 }
 int loader_unregister_plugin_ui(const char *raw,void *owner){if(!NSThread.isMainThread||!raw)return LOADER_ERR_INVALID;NSString *identifier=[NSString stringWithUTF8String:raw];ExtendUIPlugin *plugin=plugins[identifier];if(!plugin||plugin.owner!=owner)return LOADER_ERR_INVALID;[plugins removeObjectForKey:identifier];generation++;return LOADER_OK;}
 int loader_update_plugin_ui(const char *raw,const char *json,void *owner){if(!NSThread.isMainThread||!raw)return LOADER_ERR_INVALID;NSString *identifier=[NSString stringWithUTF8String:raw];ExtendUIPlugin *plugin=plugins[identifier];id state=decode(json);if(!plugin||plugin.owner!=owner||![state isKindOfClass:NSDictionary.class])return LOADER_ERR_INVALID;
- for(id key in state)if(![@[@"status",@"sidebar"] containsObject:key])return LOADER_ERR_INVALID;
- NSMutableDictionary *next=[plugin.descriptor mutableCopy];[next addEntriesFromDictionary:state];if(!descriptor(next))return LOADER_ERR_INVALID;if(![plugin.descriptor isEqual:next]){plugin.descriptor=next;generation++;}return LOADER_OK;}
+ for(id key in state)if(![@[@"status",@"sidebar",@"settings"] containsObject:key])return LOADER_ERR_INVALID;
+ NSMutableDictionary *next=[plugin.descriptor mutableCopy];[next addEntriesFromDictionary:state];if(!descriptor(next))return LOADER_ERR_INVALID;if(![plugin.descriptor isEqual:next]){NSDictionary *before=values(plugin);plugin.descriptor=next;generation++;NSDictionary *after=values(plugin);if(![before isEqual:after])notify(plugin,@{@"kind":@"settings",@"settings":after});}return LOADER_OK;}
 static NSDictionary *snapshot(void){NSDictionary *(*manager)(void)=dlsym(RTLD_DEFAULT,"loader_plugin_manager_snapshot");NSDictionary *managerState=manager?manager():@{};NSMutableArray *items=[NSMutableArray new];for(NSString *key in [plugins.allKeys sortedArrayUsingSelector:@selector(compare:)]){ExtendUIPlugin *p=plugins[key];NSMutableDictionary *item=[p.descriptor mutableCopy];item[@"visible"]=saved(key)?saved(key)[@"visible"]:@YES;item[@"values"]=values(p);[items addObject:item];}
  return @{@"generation":@(generation),@"manager":managerState,@"plugins":items,@"canPersist":@(!persistenceError),@"persistenceError":persistenceError?:@"",@"hostPid":@(getpid()),@"extendEntryVisible":saved(@"opensv2.extend")?saved(@"opensv2.extend")[@"visible"]:@YES};}
 static BOOL persist(NSMutableDictionary *next){if(persistenceError||!preferenceFile)return NO;
@@ -119,7 +119,7 @@ void loader_plugin_ui_register_runtimes(int luaReady,int jsReady){
   const char *context=lua?"opensv2.lua-extend":"opensv2.javascript-extend";
   NSMutableArray *fields=[NSMutableArray arrayWithObjects:@{@"key":@"enabled",@"title":lua?@"启用 Lua Extend":@"启用 JS Extend",@"type":@"boolean",@"default":@YES},nil];
   NSArray *functions=@[
-   @[@"voicebanks.current",@"读取当前声库",@"声库",@"voicebanks"],@[@"voicebanks.list",@"读取声库列表",@"声库",@"voicebanks"],@[@"voicebanks.select",@"切换声库",@"声库",@"voicebanks"],
+   @[@"voicebanks.current",@"读取当前声库",@"声库",@"voicebanks"],@[@"voicebanks.project",@"读取工程声库",@"声库",@"voicebanks"],@[@"voicebanks.list",@"读取声库列表",@"声库",@"voicebanks"],@[@"voicebanks.select",@"切换声库",@"声库",@"voicebanks"],
    @[@"exports.snapshot",@"读取导出状态",@"音频导出",@"exports"],@[@"exports.start",@"开始导出",@"音频导出",@"exports"],@[@"exports.status",@"查询导出任务",@"音频导出",@"exports"],@[@"exports.cancel",@"取消导出任务",@"音频导出",@"exports"],
    @[@"selection.read",@"读取工程与选区",@"工程与音高",@"editor"],@[@"notes.set_pitch",@"修改音符音高",@"工程与音高",@"editor"],@[@"pitch.read_range",@"读取音高曲线",@"工程与音高",@"editor"],@[@"pitch.replace_range",@"修改音高曲线",@"工程与音高",@"editor"],
    @[@"transport.status",@"读取播放状态",@"播放",@"editor"],@[@"transport.play",@"开始播放",@"播放",@"editor"],@[@"transport.stop",@"停止播放",@"播放",@"editor"],

@@ -7,12 +7,12 @@ $outside = Join-Path $testRoot 'original.txt'
 Set-Content -LiteralPath $outside -Value 'original fixture'
 $profile = Join-Path $testRoot 'Profile'
 $report = Join-Path $profile 'outputs/namespace-result.json'
-$arguments = '--sandbox-fixture "' + (Join-Path $build 'namespace-host/NamespaceFixture.exe') + '" "' + $profile + '" "' + $report + '" "' + $outside + '"'
+$arguments = '--managed-fixture "' + (Join-Path $build 'namespace-host/NamespaceFixture.exe') + '" "' + $profile + '" "' + $report + '" "' + $outside + '"'
 $launchFile = Join-Path $testRoot 'launch.json'
 $launcher = Start-Process -FilePath (Join-Path $build 'ExtendLauncher.exe') -ArgumentList $arguments -WindowStyle Hidden -PassThru -RedirectStandardOutput $launchFile -RedirectStandardError (Join-Path $testRoot 'launch-error.txt')
 if (!$launcher.WaitForExit(20000) -or $launcher.ExitCode -ne 0) { throw 'Managed bootstrap failed' }
 $receipt = Get-Content -LiteralPath $launchFile -Raw | ConvertFrom-Json
-if (!$receipt.appContainer -or $receipt.fixtureOnly -or !$receipt.residentCore) { throw 'Invalid managed receipt' }
+if ($receipt.appContainer -or $receipt.fixtureOnly -or !$receipt.residentCore) { throw 'Invalid managed receipt' }
 $duplicate = Start-Process -FilePath (Join-Path $build 'ExtendLauncher.exe') -ArgumentList $arguments -WindowStyle Hidden -PassThru -RedirectStandardOutput (Join-Path $testRoot 'duplicate.json') -RedirectStandardError (Join-Path $testRoot 'duplicate-error.txt')
 if (!$duplicate.WaitForExit(10000) -or $duplicate.ExitCode -ne 75) { throw 'The running profile was not locked' }
 $deadline = [DateTime]::UtcNow.AddSeconds(15)

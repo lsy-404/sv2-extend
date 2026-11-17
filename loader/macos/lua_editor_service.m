@@ -56,7 +56,7 @@ NSDictionary *loader_lua_editor_call(NSString *method,NSDictionary *arguments) {
     if([method isEqualToString:@"editor.attach"]) {
         if(epoch)return failure(@"EDITOR_PROVIDER_ALREADY_ATTACHED");
         NSArray *requested=arguments[@"methods"];
-        NSSet *supported=[NSSet setWithArray:@[@"selection.read",@"notes.set_pitch",@"pitch.read_range",@"pitch.replace_range",@"transport.status",@"transport.play",@"transport.stop",@"voicebanks.current",@"voicebanks.list",@"voicebanks.select",@"exports.snapshot",@"exports.start",@"exports.status",@"exports.cancel"]];
+        NSSet *supported=[NSSet setWithArray:@[@"selection.read",@"notes.set_pitch",@"pitch.read_range",@"pitch.replace_range",@"transport.status",@"transport.play",@"transport.stop",@"voicebanks.current",@"voicebanks.project",@"voicebanks.list",@"voicebanks.select",@"exports.snapshot",@"exports.start",@"exports.status",@"exports.cancel"]];
         if(![requested isKindOfClass:NSArray.class] || !requested.count || requested.count>supported.count)return failure(@"INVALID_ARGUMENT");
         for(id name in requested)if(![name isKindOfClass:NSString.class] || ![supported containsObject:name])return failure(@"UNSUPPORTED_HOST_CAPABILITY");
         NSDictionary *caps=@{@"methods":requested,@"transport":@"resident-native-call",@"provider":@"official-lua",@"editorVersion":arguments[@"editorVersion"]?:@0};
