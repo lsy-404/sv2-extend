@@ -6,6 +6,8 @@ int main(){
  size_t initial=0;assert(plugin_storage::read("Plugin","Key",nullptr,&initial)==LOADER_ERR_STORAGE_NOT_CONFIGURED);
  wchar_t temp[MAX_PATH];assert(GetTempPathW(MAX_PATH,temp));auto root=std::filesystem::path(temp)/(L"sv2-storage-test-"+std::to_wstring(GetCurrentProcessId()));assert(!std::filesystem::exists(root));assert(std::filesystem::create_directory(root));assert(plugin_storage::install(root));
  const uint8_t a[]={1,2,3},b[]={9,8};size_t n=0;
+ {std::filesystem::path dir;std::vector<plugin_storage::Handle> held;assert(plugin_storage::directories("Probe",dir,held));assert(held.size()==4);auto renamed=root;renamed+=L"-renamed";assert(!MoveFileExW(root.c_str(),renamed.c_str(),0));}
+ auto root_link=root;root_link+=L"-link";if(CreateSymbolicLinkW(root_link.c_str(),root.c_str(),3)){assert(plugin_storage::install(root_link));assert(plugin_storage::write("Plugin","Key",a,3)==LOADER_ERR_STORAGE_IO);assert(RemoveDirectoryW(root_link.c_str()));assert(plugin_storage::install(root));}
  assert(plugin_storage::write("Plugin","Key",a,3)==LOADER_OK);assert(plugin_storage::write("plugin","key",b,2)==LOADER_OK);
  assert(plugin_storage::read("Plugin","Key",nullptr,&n)==LOADER_OK&&n==3);uint8_t out[]={7,7,7};n=2;assert(plugin_storage::read("Plugin","Key",out,&n)==LOADER_ERR_BUFFER_TOO_SMALL&&n==3&&out[0]==7);
  n=3;assert(plugin_storage::read("Plugin","Key",out,&n)==LOADER_OK&&out[0]==1);assert(plugin_storage::write("Plugin","Key",b,2)==LOADER_OK);n=3;assert(plugin_storage::read("Plugin","Key",out,&n)==LOADER_OK&&n==2&&out[0]==9);

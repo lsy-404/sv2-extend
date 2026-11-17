@@ -56,11 +56,12 @@ inline std::wstring native_path(const fs::path &path){auto value=path.wstring();
 inline bool directories(const char *id,fs::path &dir,std::vector<Handle> &held){
  fs::path root;{std::lock_guard<std::mutex> lock(install_mutex);root=profile;}if(root.empty())return false;
  auto encoded=disk_name(id,true);if(encoded.empty())return false;dir=root/L"storage"/L"plugin-data"/encoded;
- fs::path current=dir.root_path();for(const auto &part:dir.relative_path()){
-  current/=part;
-  if(current==root||current.native().size()<root.native().size()){if(GetFileAttributesW(native_path(current).c_str())==INVALID_FILE_ATTRIBUTES)return false;}else if(!CreateDirectoryW(native_path(current).c_str(),nullptr)&&GetLastError()!=ERROR_ALREADY_EXISTS)return false;
-  DWORD access=FILE_READ_ATTRIBUTES|READ_CONTROL;if(current==dir)access|=FILE_ADD_FILE;
-  Handle h(CreateFileW(native_path(current).c_str(),access,FILE_SHARE_READ|FILE_SHARE_WRITE,nullptr,OPEN_EXISTING,FILE_FLAG_BACKUP_SEMANTICS|FILE_FLAG_OPEN_REPARSE_POINT,nullptr));BY_HANDLE_FILE_INFORMATION data{};if(!h||!info(h.value,data,true))return false;held.push_back(std::move(h));
+ auto open_directory=[&](const fs::path &path,DWORD access){Handle h(CreateFileW(native_path(path).c_str(),access,FILE_SHARE_READ|FILE_SHARE_WRITE,nullptr,OPEN_EXISTING,FILE_FLAG_BACKUP_SEMANTICS|FILE_FLAG_OPEN_REPARSE_POINT,nullptr));BY_HANDLE_FILE_INFORMATION data{};if(!h||!info(h.value,data,true))return false;held.push_back(std::move(h));return true;};
+ if(!open_directory(root,FILE_READ_ATTRIBUTES))return false;
+ fs::path current=root;for(const auto &part:{std::wstring(L"storage"),std::wstring(L"plugin-data"),encoded}){
+  current/=part;if(!CreateDirectoryW(native_path(current).c_str(),nullptr)&&GetLastError()!=ERROR_ALREADY_EXISTS)return false;
+  DWORD access=FILE_READ_ATTRIBUTES;if(current==dir)access|=READ_CONTROL|FILE_ADD_FILE;
+  if(!open_directory(current,access))return false;
  }return true;
 }
 inline int unconfigured(){std::lock_guard<std::mutex> lock(install_mutex);return profile.empty()?LOADER_ERR_STORAGE_NOT_CONFIGURED:LOADER_ERR_STORAGE_IO;}
