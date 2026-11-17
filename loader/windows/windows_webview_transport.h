@@ -9,6 +9,7 @@
 #include <vector>
 #include <filesystem>
 #include <fstream>
+#include <cwctype>
 #include "vendor/json.hpp"
 
 namespace windows_webview_transport {
@@ -80,18 +81,55 @@ inline bool install(){
 inline std::wstring arguments(){std::lock_guard<std::mutex> lock(mutex);if(!current.installed)return {};return L"--proxy-server=socks5://127.0.0.1:"+std::to_wstring(port)+L" --proxy-bypass-list=<-loopback> --disable-quic";}
 inline bool setblocked(bool value){std::unique_lock<std::mutex> lock(mutex);if(!current.installed)return false;if(!value&&current.error)return false;current.blocked=value;if(!value)return true;for(auto s:clients)shutdown(s,SD_BOTH);for(auto s:remotes)shutdown(s,SD_BOTH);return changed.wait_for(lock,std::chrono::seconds(10),[]{return current.active==0;})&&!current.error;}
 inline State state(){std::lock_guard<std::mutex> lock(mutex);return {current.installed,current.blocked,current.blocked&&current.active!=0,static_cast<unsigned>(remotes.size()),current.installed&&!current.error};}
+inline bool no_reparse(const std::filesystem::path &path){
+ auto full=std::filesystem::absolute(path).lexically_normal();auto part=full.root_path();
+ for(const auto &component:full.relative_path()){
+  part/=component;DWORD attr=GetFileAttributesW(part.c_str());
+  if(attr==INVALID_FILE_ATTRIBUTES){DWORD e=GetLastError();if(e!=ERROR_FILE_NOT_FOUND&&e!=ERROR_PATH_NOT_FOUND)return false;continue;}
+  if(attr&FILE_ATTRIBUTE_REPARSE_POINT)return false;
+ }
+ return true;
+}
+inline bool registry_value_present(HKEY root,const wchar_t *key,const wchar_t *name,REGSAM view){
+ HKEY h=nullptr;LONG result=RegOpenKeyExW(root,key,0,KEY_QUERY_VALUE|view,&h);
+ if(result==ERROR_FILE_NOT_FOUND||result==ERROR_PATH_NOT_FOUND)return false;
+ if(result!=ERROR_SUCCESS)return true;
+ DWORD type=0,size=0;result=RegQueryValueExW(h,name,nullptr,&type,nullptr,&size);RegCloseKey(h);
+ return result!=ERROR_FILE_NOT_FOUND;
+}
+inline bool registry_key_present(HKEY root,const wchar_t *key,REGSAM view){
+ HKEY h=nullptr;LONG result=RegOpenKeyExW(root,key,0,KEY_QUERY_VALUE|KEY_ENUMERATE_SUB_KEYS|view,&h);if(result==ERROR_FILE_NOT_FOUND||result==ERROR_PATH_NOT_FOUND)return false;if(result!=ERROR_SUCCESS)return true;RegCloseKey(h);return true;
+}
+inline bool configuration_supported(){
+ wchar_t value[32768];
+ for(const wchar_t *name:{L"WEBVIEW2_USER_DATA_FOLDER",L"WEBVIEW2_BROWSER_EXECUTABLE_FOLDER"})if(GetEnvironmentVariableW(name,value,32768)!=0)return false;
+ DWORD n=GetEnvironmentVariableW(L"WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS",value,32768);if(n>=32768)return false;
+ std::wstring flags(value,n);for(auto &ch:flags)ch=static_cast<wchar_t>(towlower(ch));
+ for(const wchar_t *needle:{L"--proxy",L"--no-proxy",L"--edge-webview-switches",L"--force-webrtc",L"--webrtc",L"--enable-quic",L"--host-resolver-rules"})if(flags.find(needle)!=std::wstring::npos)return false;
+ std::wstring command=GetCommandLineW();for(auto &ch:command)ch=static_cast<wchar_t>(towlower(ch));if(command.find(L"--edge-webview-switches")!=std::wstring::npos)return false;
+ wchar_t exe[32768];n=GetModuleFileNameW(nullptr,exe,32768);if(!n||n>=32768)return false;auto app=std::filesystem::path(exe).filename().wstring();
+ for(HKEY root:{HKEY_CURRENT_USER,HKEY_LOCAL_MACHINE})for(REGSAM view:{REGSAM(KEY_WOW64_32KEY),REGSAM(KEY_WOW64_64KEY)}){
+  for(const wchar_t *name:{L"ProxySettings",L"ProxyMode",L"ProxyServer",L"ProxyPacUrl",L"ProxyBypassList",L"WebRtcIPHandling",L"WebRtcIPHandlingUrl",L"WebRtcLocalIpsAllowedUrls"})
+   if(registry_value_present(root,L"SOFTWARE\\Policies\\Microsoft\\Edge",name,view))return false;
+  for(const wchar_t *key:{L"SOFTWARE\\Policies\\Microsoft\\Edge\\ProxySettings",L"SOFTWARE\\Policies\\Microsoft\\Edge\\ProxyOverrideRules",L"SOFTWARE\\Policies\\Microsoft\\Edge\\WebRtcIPHandlingUrl"})if(registry_key_present(root,key,view))return false;
+  for(const wchar_t *key:{L"SOFTWARE\\Policies\\Microsoft\\Edge\\WebView2\\AdditionalBrowserArguments",L"SOFTWARE\\Policies\\Microsoft\\Edge\\WebView2\\UserDataFolder",L"SOFTWARE\\Policies\\Microsoft\\Edge\\WebView2\\BrowserExecutableFolder"})
+   if(registry_value_present(root,key,L"*",view)||registry_value_present(root,key,app.c_str(),view))return false;
+ }
+ return true;
+}
 inline bool prepare_profile(PCWSTR udf){
  if(!udf||!*udf)return false;
  std::lock_guard<std::mutex> lock(mutex);
  try{
-  auto root=std::filesystem::absolute(std::filesystem::path(udf)).lexically_normal();auto key=root.wstring();if(prepared.count(key))return true;
-  auto dir=root/L"EBWebView"/L"Default";std::filesystem::create_directories(dir);auto path=dir/L"Preferences";
+  auto root=std::filesystem::absolute(std::filesystem::path(udf)).lexically_normal();if(!no_reparse(root))return false;auto key=root.wstring();
+  auto dir=root/L"EBWebView"/L"Default";auto path=dir/L"Preferences";if(!no_reparse(path))return false;if(prepared.count(key))return true;std::filesystem::create_directories(dir);if(!no_reparse(path))return false;
   nlohmann::json prefs=nlohmann::json::object();if(std::filesystem::exists(path)){std::ifstream input(path,std::ios::binary);if(!input)return false;input>>prefs;if(!prefs.is_object())return false;}
   if(prefs.contains("webrtc")&&!prefs["webrtc"].is_object())return false;
   prefs["webrtc"]["ip_handling_policy"]="disable_non_proxied_udp";
-  auto temp=dir/(L"Preferences."+std::to_wstring(GetCurrentProcessId())+L".tmp");
-  {std::ofstream output(temp,std::ios::binary|std::ios::trunc);if(!output)return false;output<<prefs.dump();output.flush();if(!output)return false;}
-  if(!MoveFileExW(temp.c_str(),path.c_str(),MOVEFILE_REPLACE_EXISTING|MOVEFILE_WRITE_THROUGH)){DeleteFileW(temp.c_str());return false;}
+  auto temp=dir/(L"Preferences."+std::to_wstring(GetCurrentProcessId())+L"."+std::to_wstring(GetTickCount64())+L".tmp");
+  HANDLE file=CreateFileW(temp.c_str(),GENERIC_WRITE,0,nullptr,CREATE_NEW,FILE_ATTRIBUTE_NORMAL|FILE_FLAG_OPEN_REPARSE_POINT,nullptr);if(file==INVALID_HANDLE_VALUE)return false;
+  std::string data=prefs.dump();DWORD written=0;bool ok=data.size()<=MAXDWORD&&WriteFile(file,data.data(),static_cast<DWORD>(data.size()),&written,nullptr)&&written==data.size()&&FlushFileBuffers(file);CloseHandle(file);
+  if(!ok||!no_reparse(path)||!MoveFileExW(temp.c_str(),path.c_str(),MOVEFILE_REPLACE_EXISTING|MOVEFILE_WRITE_THROUGH)){DeleteFileW(temp.c_str());return false;}
   prepared.insert(key);return true;
  }catch(...){return false;}
 }
