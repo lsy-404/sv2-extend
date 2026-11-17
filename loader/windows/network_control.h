@@ -46,9 +46,19 @@ class Controller {
   Bstr name(block?L"SV2 Extend Network Block":L"SV2 Extend Network Allow"); ComPtr<IRegisteredTask> task;
   hr=folder->GetTask(name.p,task.out());if(FAILED(hr))return hr;
   ComPtr<IRunningTask> running;hr=task->Run(empty,running.out());if(FAILED(hr))return hr;
+  Bstr instance(nullptr);hr=running->get_InstanceGuid(&instance.p);if(FAILED(hr)||!instance.p||!SysStringLen(instance.p))return FAILED(hr)?hr:E_UNEXPECTED;
   DWORD start=GetTickCount();
-  for(;;){ TASK_STATE state;hr=running->get_State(&state);if(FAILED(hr))return hr;
-   if(state==TASK_STATE_READY || state==TASK_STATE_DISABLED)break;
+  for(;;){
+   ComPtr<IRunningTaskCollection> instances;hr=task->GetInstances(0,instances.out());if(FAILED(hr))return hr;
+   LONG count=0;hr=instances->get_Count(&count);if(FAILED(hr))return hr;if(count<0||count>1024)return E_UNEXPECTED;
+   bool present=false,complete=true;
+   for(LONG i=1;i<=count;i++){
+    VARIANT index;VariantInit(&index);index.vt=VT_I4;index.lVal=i;ComPtr<IRunningTask> item;
+    hr=instances->get_Item(index,item.out());if(FAILED(hr)){complete=false;break;}
+    Bstr candidate(nullptr);hr=item->get_InstanceGuid(&candidate.p);if(FAILED(hr)||!candidate.p){complete=false;break;}
+    if(_wcsicmp(instance.p,candidate.p)==0){present=true;break;}
+   }
+   TASK_STATE state=TASK_STATE_UNKNOWN;if(complete&&!present){hr=task->get_State(&state);if(FAILED(hr))return hr;if(state==TASK_STATE_READY)break;}
    if(GetTickCount()-start>35000)return HRESULT_FROM_WIN32(ERROR_TIMEOUT);
    Sleep(100);
   }
