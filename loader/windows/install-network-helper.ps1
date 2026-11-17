@@ -12,6 +12,32 @@ if ($sid.IsWellKnown([Security.Principal.WellKnownSidType]::WorldSid) -or $sid.I
 $profilePath = [IO.Path]::GetFullPath($Profile).TrimEnd('\')
 $target = [IO.Path]::Combine($profilePath, 'runtime', 'Synthesizer V Studio 2 Pro', 'synthv-studio.exe')
 if ($target.Contains("`n") -or $target.Contains("`r")) { throw 'Invalid profile path' }
+Add-Type -TypeDefinition @"
+using System;
+using System.Text;
+using System.Runtime.InteropServices;
+using Microsoft.Win32.SafeHandles;
+public static class SV2NetworkExecutablePath {
+    [DllImport("kernel32.dll", CharSet=CharSet.Unicode, SetLastError=true)]
+    public static extern SafeFileHandle CreateFileW(string name, uint access, uint share, IntPtr security, uint creation, uint flags, IntPtr template);
+    [DllImport("kernel32.dll", CharSet=CharSet.Unicode, SetLastError=true)]
+    public static extern uint GetFinalPathNameByHandleW(SafeFileHandle file, StringBuilder path, uint size, uint flags);
+}
+"@
+$handle = [SV2NetworkExecutablePath]::CreateFileW($target, 0x80, 7, [IntPtr]::Zero, 3, 0x80, [IntPtr]::Zero)
+if ($handle.IsInvalid) { throw 'Managed host executable is unavailable' }
+try {
+    $buffer = [Text.StringBuilder]::new(32768)
+    $length = [SV2NetworkExecutablePath]::GetFinalPathNameByHandleW($handle, $buffer, [uint32]$buffer.Capacity, 0)
+    if ($length -eq 0 -or $length -ge $buffer.Capacity) { throw 'Cannot resolve managed host executable' }
+    $physical = $buffer.ToString()
+    if ($physical.StartsWith('\\?\UNC\', [StringComparison]::OrdinalIgnoreCase)) { $physical = '\\' + $physical.Substring(8) }
+    elseif ($physical.StartsWith('\\?\', [StringComparison]::OrdinalIgnoreCase)) { $physical = $physical.Substring(4) }
+    else { throw 'Unexpected canonical executable path' }
+    if (-not [string]::Equals($target, $physical, [StringComparison]::OrdinalIgnoreCase)) { throw 'Profile must be the physical canonical path' }
+    $target = $physical
+} finally { $handle.Dispose() }
+
 $programFiles = [IO.Path]::GetFullPath([Environment]::GetFolderPath('ProgramFiles')).TrimEnd('\')
 $source = [IO.Path]::GetFullPath($Helper)
 if ((Get-FileHash -LiteralPath $source -Algorithm SHA256).Hash -ne $ExpectedSha256) { throw 'Helper hash mismatch' }

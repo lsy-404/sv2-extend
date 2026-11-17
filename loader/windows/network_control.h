@@ -3,6 +3,7 @@
 #include <taskschd.h>
 #include <netfw.h>
 #include "network_firewall.h"
+#include "network_path.h"
 #include <string>
 #include <thread>
 #include <mutex>
@@ -60,7 +61,8 @@ class Controller {
   if(modify!=NET_FW_MODIFY_STATE_OK)return HRESULT_FROM_WIN32(ERROR_ACCESS_DISABLED_BY_POLICY);
   long active=0;hr=policy->get_CurrentProfileTypes(&active);if(FAILED(hr))return hr;if(!active)return HRESULT_FROM_WIN32(ERROR_NOT_READY);
   for(long profile : {long(NET_FW_PROFILE2_DOMAIN),long(NET_FW_PROFILE2_PRIVATE),long(NET_FW_PROFILE2_PUBLIC)})if(active&profile){VARIANT_BOOL enabled=VARIANT_FALSE;hr=policy->get_FirewallEnabled((NET_FW_PROFILE_TYPE2)profile,&enabled);if(FAILED(hr))return hr;if(enabled!=VARIANT_TRUE)return HRESULT_FROM_WIN32(ERROR_NOT_READY);}
-  ComPtr<INetFwRule> rule;hr=windows_firewall::find(policy.p,target,rule.out());if(FAILED(hr))return hr;
+  std::wstring physical;if(!canonical_executable_path(target,physical))return HRESULT_FROM_WIN32(ERROR_FILE_NOT_FOUND);
+  ComPtr<INetFwRule> rule;hr=windows_firewall::find(policy.p,physical,rule.out());if(FAILED(hr))return hr;
   VARIANT_BOOL enabled=VARIANT_FALSE;hr=rule->get_Enabled(&enabled);if(FAILED(hr))return hr;
   return ((enabled==VARIANT_TRUE)==block)?S_OK:HRESULT_FROM_WIN32(ERROR_INVALID_DATA);
  }
