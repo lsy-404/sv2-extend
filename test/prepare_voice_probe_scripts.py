@@ -14,6 +14,14 @@ replacements = {
     'js': ("SV.print('EXTEND_JS_VOICE_VERIFICATION '+JSON.stringify(checks))", "E.request('editor.verification_report', checks)"),
 }
 outputs = []
+for language, filename, old, new in [
+    ('lua', 'windows_script_live.lua', "SV:print('EXTEND_LUA_VERIFICATION ' .. json.encode(checks))", "extend.request('editor.verification_report', {checks=checks})"),
+    ('js', 'windows_javascript_live.js', "SV.print('EXTEND_JS_VERIFICATION ' + JSON.stringify(checks))", "extend.request('editor.verification_report', {checks:checks})"),
+]:
+    body = (source / filename).read_text(encoding='utf-8')
+    if body.count(old) != 1:
+        raise RuntimeError('Unexpected verification script format')
+    outputs.append((args.out / f'extend-parity-{language}.{language}', body.replace(old, new)))
 for language, (old, new) in replacements.items():
     body = (source / f'script_voice_live.{language}').read_text(encoding='utf-8')
     if body.count(old) != 1:
