@@ -5,6 +5,9 @@
 #include <string>
 #include <atomic>
 
+void loader_category_before_root();
+void loader_category_after_root();
+void loader_category_cleanup_root();
 namespace editor_autostart {
 using Scan=void(*)(void*);using Run=void(*)(void*);using RootInit=void(*)(void*,void*);using RootCleanup=void(*)(void*);
 static Scan original,scanEntry;static Run run;static editor_lua::Service *resident;static std::wstring controlled;
@@ -13,6 +16,7 @@ static void *manager;static void *candidate;static unsigned long long generation
 static bool scanSeen,runRequested,initialScanRequested;
 static const char *initialScanReason="not_attempted";
 Status status(){return {resident!=nullptr,scanSeen,runRequested,initialScanReason};}
+bool root_ready(){return resident&&GetCurrentThreadId()==resident->thread&&liveRoot.load()!=nullptr;}
 static bool readable(const void *pointer,size_t length){
  if(!pointer||!length)return false;auto cursor=reinterpret_cast<uintptr_t>(pointer);if(cursor+length<cursor)return false;auto end=cursor+length;
  while(cursor<end){MEMORY_BASIC_INFORMATION page{};if(!VirtualQuery(reinterpret_cast<void*>(cursor),&page,sizeof page))return false;DWORD protection=page.Protect&0xff;
@@ -46,16 +50,15 @@ static void scan(void *value){
  if(find(nullptr,false,&item)){candidate=item;pendingGeneration=generation;timer=SetTimer(nullptr,0,1,start);}
 }
 static void init_root(void *root,void *context){
- originalInit(root,context);if(resident&&GetCurrentThreadId()==resident->thread)liveRoot.store(root);
+ if(resident&&GetCurrentThreadId()==resident->thread)loader_category_before_root();
+ originalInit(root,context);if(resident&&GetCurrentThreadId()==resident->thread){liveRoot.store(root);loader_category_after_root();}
 }
 static void cleanup_root(void *root){
  void *expected=root;bool owned=liveRoot.compare_exchange_strong(expected,nullptr);
  if(owned&&resident&&GetCurrentThreadId()==resident->thread){
+  loader_category_cleanup_root();
   ++generation;if(timer){KillTimer(nullptr,timer);timer=0;}manager=nullptr;candidate=nullptr;scanSeen=false;runRequested=false;initialScanRequested=false;
-  if(!resident->epoch.empty()){
-   resident->api->unregister_capability_provider("editor.lua",resident);resident->epoch.clear();auto jobs=std::move(resident->jobs);resident->jobs.clear();
-   for(auto &entry:jobs)editor_lua::Service::reply(entry.second,editor_lua::Service::fail("EDITOR_PROVIDER_OFFLINE"));
-  }
+  resident->reset();
  }
  originalCleanup(root);
 }

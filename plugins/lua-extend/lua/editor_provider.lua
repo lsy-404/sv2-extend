@@ -224,7 +224,7 @@ local function poll()
       else response={ok=false,error={code='EDITOR_REJECTED',message=tostring(response)}} end
     end
     local completed, reason=extend.request('editor.reply',{epoch=epoch,id=request.id,response=response})
-    if not completed then error(reason and reason.code or 'Native editor reply failed') end
+    if not completed and (not reason or (reason.code~='EDITOR_REQUEST_EXPIRED' and reason.code~='EDITOR_PROVIDER_OFFLINE')) then error(reason and reason.code or 'Native editor reply failed') end
   end
   SV:setTimeout(15,poll)
 end

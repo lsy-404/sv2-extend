@@ -30,6 +30,11 @@ static bool same_tree(const fs::path &source,const fs::path &target){
 }
 static std::wstring identifier(){std::random_device random;const wchar_t alphabet[]=L"0123456789abcdef";std::wstring value=L"SV2Extend.";for(int i=0;i<32;i++)value+=alphabet[random()&15];return value;}
 static fs::path roaming(){PWSTR path=nullptr;require(SUCCEEDED(SHGetKnownFolderPath(FOLDERID_RoamingAppData,0,nullptr,&path)),"Cannot locate official user data");fs::path result(path);CoTaskMemFree(path);return result;}
+static fs::path common_data(){PWSTR path=nullptr;require(SUCCEEDED(SHGetKnownFolderPath(FOLDERID_ProgramData,0,nullptr,&path)),"Cannot locate shared application data");fs::path result(path);CoTaskMemFree(path);return result;}
+static void common_resources(const fs::path &data){
+ auto source=common_data()/L"Dreamtonics"/L"Synthesizer V Studio 2";auto destination=data/L"ProgramData"/L"Dreamtonics"/L"Synthesizer V Studio 2";
+ if(fs::exists(source)&&!fs::exists(destination)){inspect(source);fs::create_directories(destination.parent_path());auto staging=destination.parent_path()/(L".shared-"+identifier());fs::copy(source,staging,fs::copy_options::recursive);fs::rename(staging,destination);}
+}
 static std::string contents(const fs::path &path){std::ifstream file(path,std::ios::binary);require(bool(file),"Cannot read editor resource");return {std::istreambuf_iterator<char>(file),std::istreambuf_iterator<char>()};}
 static bool modules_owned(const fs::path &directory){std::ifstream file(directory/L"owner.txt");std::string marker;std::getline(file,marker);return fs::is_regular_file(directory/L"owner.txt")&&marker=="sv2-extend"&&file.peek()==std::char_traits<char>::eof();}
 static void editor_resources(const fs::path &native,const fs::path &data){
@@ -59,10 +64,10 @@ struct State {
   require(name.size()==42&&name.substr(0,10)==L"SV2Extend."&&name.find_first_not_of(L"0123456789abcdef",10)==std::wstring::npos,"Invalid container identity");
   HRESULT result=CreateAppContainerProfile(name.c_str(),L"SV2 Extend",L"Isolated SV2 extension host",nullptr,0,&sid);
   if(FAILED(result))require(result==HRESULT_FROM_WIN32(ERROR_ALREADY_EXISTS)&&SUCCEEDED(DeriveAppContainerSidFromAppContainerName(name.c_str(),&sid)),"Cannot create container identity");
-  data=profile/L"host-data";fs::create_directories(data/L"Roaming");fs::create_directories(data/L"Local");fs::create_directories(data/L"LocalLow");fs::create_directories(data/L"Temp");
+  data=profile/L"host-data";fs::create_directories(data/L"ProgramData");fs::create_directories(data/L"Roaming");fs::create_directories(data/L"Local");fs::create_directories(data/L"LocalLow");fs::create_directories(data/L"Temp");
   auto destination=data/L"Roaming"/L"Dreamtonics"/L"Synthesizer V Studio 2";auto source=roaming()/L"Dreamtonics"/L"Synthesizer V Studio 2";
   if(migrate&&fs::exists(source)&&!fs::exists(destination)){inspect(source);fs::create_directories(destination.parent_path());auto staging=destination.parent_path()/(L".migration-"+identifier());fs::copy(source,staging,fs::copy_options::recursive);fs::rename(staging,destination);copied=true;}
-  if(migrate)editor_resources(core.parent_path(),data);
+  if(migrate){common_resources(data);editor_resources(core.parent_path(),data);}
   auto runtime=profile/L"runtime"/L"Synthesizer V Studio 2 Pro";
   bool update=!same_tree(original.parent_path(),runtime);
   if(update){fs::create_directories(runtime.parent_path());auto staging=runtime.parent_path()/(L".host-"+identifier());fs::copy(original.parent_path(),staging,fs::copy_options::recursive);for(const auto &item:fs::recursive_directory_iterator(original.parent_path()))if(item.is_regular_file())stamp_file(item.path(),staging/item.path().lexically_relative(original.parent_path()));if(fs::exists(runtime))fs::rename(runtime,runtime.parent_path()/(L".previous-"+identifier()));fs::rename(staging,runtime);}

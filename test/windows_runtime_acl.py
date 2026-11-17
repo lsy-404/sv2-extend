@@ -3,7 +3,7 @@ from ctypes import wintypes
 p=argparse.ArgumentParser();p.add_argument('--build',type=pathlib.Path,required=True);p.add_argument('--launcher-source',type=pathlib.Path,required=True);p.add_argument('--compiler',default='g++');args=p.parse_args();repo=pathlib.Path(__file__).resolve().parents[1];build=args.build.resolve();root=pathlib.Path(tempfile.mkdtemp(prefix='sv2-runtime-acl-'));binary=root/'binary';binary.mkdir();hostdir=root/'host';hostdir.mkdir();profile=root/'profile'
 def run(*args_): subprocess.run([args.compiler,'-std=c++17','-D_WIN32_WINNT=0x0602','-O2','-Wall','-Wextra','-Werror','-Wno-cast-function-type','-Wno-misleading-indentation','-static','-municode',*map(str,args_)],check=True)
 source=root/'launcher.cpp';shutil.copyfile(args.launcher_source,source);shutil.copyfile(build/'ExtendCore.dll',binary/'ExtendCore.dll')
-run('-I'+str(repo/'loader/windows'),'-I'+str(build),source,'-o',binary/'ExtendLauncher.exe','-luserenv','-ladvapi32','-lshell32','-lole32','-luuid')
+run('-I'+str(repo/'loader/windows'),'-I'+str(build),source,'-o',binary/'ExtendLauncher.exe','-luserenv','-ladvapi32','-lshell32','-lole32','-loleaut32','-luuid')
 run(repo/'test/windows_runtime_acl_host.cpp','-o',hostdir/'Probe.exe','-lshell32','-lole32','-luuid')
 (hostdir/'asset.txt').write_text('one');(hostdir/'delete.txt').write_text('preserve');(profile/'plugins').mkdir(parents=True);(profile/'plugins/delete.txt').write_text('preserve')
 class FileTime(ctypes.Structure): _fields_=[('low',wintypes.DWORD),('high',wintypes.DWORD)]

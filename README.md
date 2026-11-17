@@ -6,8 +6,8 @@ Synthesizer V Studio 2 的宿主内扩展框架，提供插件加载、实时 MC
 
 - Loader 管理宿主副本及可配置数据目录，运行时驻留宿主进程。
 - 插件通过版本化 C API 接入，可注册右侧面板和功能设置。
-- Extend 面板提供插件安装、更新、启停和删除。
-- MCP 支持音符音高、pitchDelta 曲线、声库读取与切换、WAV 导出。
+- Extend 面板提供插件入口和设置；macOS 还提供插件安装、更新、启停和删除。
+- MCP 支持音符音高和 pitchDelta 曲线；macOS 还支持声库读取与切换、WAV 导出。
 - Lua/JavaScript 共享扩展 API，并提供本地及在线 HTTP 请求。
 
 ## 平台
@@ -16,7 +16,7 @@ Synthesizer V Studio 2 的宿主内扩展框架，提供插件加载、实时 MC
 | --- | --- |
 | macOS / SV2 2.3.0 arm64 | 本机功能验证 |
 | macOS x86_64 | 通用二进制构建 |
-| Windows x64 / SV2 2.3.0 | 隔离宿主、原生面板、MCP、内部 Lua、音符与 pitch 编辑验证 |
+| Windows x64 / SV2 2.3.0 | 隔离宿主中的原生右侧分类、停靠面板、MCP、内部 Lua、音符与 pitch 编辑已验证 |
 
 网络控制已接入 socket、NSURLSession、Network.framework 和 WebKit；各路径的覆盖状态见 [网络状态](docs/NETWORK-STATUS.md)。
 

@@ -9,6 +9,7 @@
 #include "bootstrap.h"
 #include "early_entry_blob.h"
 #include "host_sandbox.h"
+#include "transient_layout.h"
 namespace fs=std::filesystem;
 struct Handle{HANDLE h=nullptr;~Handle(){if(h&&h!=INVALID_HANDLE_VALUE)CloseHandle(h);}};
 static bool contains_path(const fs::path &parent,const fs::path &child){auto p=parent.begin(),c=child.begin();for(;p!=parent.end();++p,++c){if(c==child.end()||CompareStringOrdinal(p->c_str(),-1,c->c_str(),-1,TRUE)!=CSTR_EQUAL)return false;}return true;}
@@ -25,7 +26,7 @@ int wmain(int argc,wchar_t **argv){
  auto filename=host.filename().wstring();for(auto &c:filename)c=towlower(c);if(fixture&&(filename.find(L"synthv")!=std::wstring::npos||filename.find(L"synthesizer")!=std::wstring::npos))return 78;
  if(std::wstring(argv[1])==L"--host"&&filename!=L"synthv-studio.exe")return 78;
  host_sandbox::State sandbox;SECURITY_CAPABILITIES capabilities{};
- if(managed){auto relative=profile.lexically_relative(host.parent_path());if(!relative.empty()&&*relative.begin()!=L"..")return 78;sandbox.prepare(host,profile,core,std::wstring(argv[1])==L"--host");host=sandbox.host;capabilities.AppContainerSid=sandbox.sid;if(sandbox.capability_count){capabilities.Capabilities=&sandbox.firmware;capabilities.CapabilityCount=1;}if(!UpdateProcThreadAttribute(sandbox.attributes,0,PROC_THREAD_ATTRIBUTE_SECURITY_CAPABILITIES,&capabilities,sizeof capabilities,nullptr,nullptr))return 77;}
+ if(managed){auto relative=profile.lexically_relative(host.parent_path());if(!relative.empty()&&*relative.begin()!=L"..")return 78;sandbox.prepare(host,profile,core,std::wstring(argv[1])==L"--host");if(std::wstring(argv[1])==L"--host")transient_layout::retire(sandbox.data/L"Roaming"/L"Dreamtonics"/L"Synthesizer V Studio 2"/L"settings"/L"settings.xml",profile);host=sandbox.host;capabilities.AppContainerSid=sandbox.sid;if(sandbox.capability_count){capabilities.Capabilities=&sandbox.firmware;capabilities.CapabilityCount=1;}if(!UpdateProcThreadAttribute(sandbox.attributes,0,PROC_THREAD_ATTRIBUTE_SECURITY_CAPABILITIES,&capabilities,sizeof capabilities,nullptr,nullptr))return 77;}
  if(!pe64(host)||!pe64(core)||core.wstring().size()>16000)return 65;
  HMODULE image=LoadLibraryExW(core.c_str(),nullptr,DONT_RESOLVE_DLL_REFERENCES);if(!image)return 66;
  auto entry=GetProcAddress(image,"ExtendInitialize");uintptr_t rva=(uintptr_t)entry-(uintptr_t)image;FreeLibrary(image);if(!entry||rva>UINT32_MAX)return 66;

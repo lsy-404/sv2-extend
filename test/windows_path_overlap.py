@@ -6,7 +6,7 @@ for target in [root,official,official/'nested']:
  assert sentinel.read_text()=='original' and not (official/'nested').exists()
 sibling=root/'official-neighbor';result=subprocess.run(['pwsh','-NoProfile','-NonInteractive','-File',str(repo/'loader/windows/install.ps1'),'-BuildDirectory',str(empty),'-HostExecutable',str(host),'-InstallDirectory',str(sibling)],capture_output=True,text=True,encoding="utf-8",errors="replace",timeout=15)
 assert result.returncode and 'Keep the Loader separate' not in (result.stdout+result.stderr) and not sibling.exists()
-launcher=root/'ExtendLauncher.exe';subprocess.run([args.compiler,'-std=c++17','-D_WIN32_WINNT=0x0602','-O2','-Wall','-Wextra','-Werror','-Wno-cast-function-type','-Wno-misleading-indentation','-static','-municode','-I'+str(build),str(repo/'loader/windows/launcher.cpp'),'-o',str(launcher),'-luserenv','-ladvapi32','-lshell32','-lole32','-luuid'],check=True)
+launcher=root/'ExtendLauncher.exe';subprocess.run([args.compiler,'-std=c++17','-D_WIN32_WINNT=0x0602','-O2','-Wall','-Wextra','-Werror','-Wno-cast-function-type','-Wno-misleading-indentation','-static','-municode','-I'+str(build),str(repo/'loader/windows/launcher.cpp'),'-o',str(launcher),'-luserenv','-ladvapi32','-lshell32','-lole32','-loleaut32','-luuid'],check=True)
 for target in [root,official,official/'nested']:
  result=subprocess.run([str(launcher),'--sandbox-fixture',str(host),str(target)],capture_output=True,text=True,encoding="utf-8",errors="replace",timeout=15)
  assert result.returncode==78,(target,result.returncode,result.stderr)

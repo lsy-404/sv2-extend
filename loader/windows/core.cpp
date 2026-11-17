@@ -13,6 +13,7 @@
 #include "../../sdk/include/loader_api.h"
 #include "../../sdk/include/extend_platform.h"
 #include "native_panel.h"
+#include "native_category_registry.h"
 #include "data_namespace.h"
 #include "editor_gate.h"
 #include "editor_autostart.h"
@@ -22,6 +23,22 @@ DWORD main_thread;HWND dispatcher;loader_api_v1 api{};std::string executable,hos
 std::vector<HMODULE> modules;
 std::unique_ptr<editor_lua::Service> editor_service;int editor_gate_result=LOADER_ERR_NOT_SUPPORTED,editor_start_result=LOADER_ERR_NOT_SUPPORTED;
 bool editor_online(){return editor_service&&!editor_service->epoch.empty()&&GetTickCount64()-editor_service->heartbeat<=2000;}
+void log_message(const char *);
+void category_update(void *pane,const char *id,HWND window,const RECT &bounds,bool visible){native_panel::dock_update(pane,id,window,bounds,visible);}
+void category_remove(void *pane){native_panel::dock_remove(pane);}
+void category_sync(){
+ if(!native_category_registry::prepared)return;auto snapshot=native_panel::categories();std::vector<native_category_registry::Entry> entries;entries.reserve(snapshot.size());for(const auto &entry:snapshot)entries.push_back({entry.id.c_str(),entry.title.c_str(),entry.visible});
+ if(!native_category_registry::sync(entries.data(),entries.size(),true))log_message("native-category-sync-unavailable");
+}
+void category_tick(){
+ if(!editor_autostart::root_ready())return;
+ if(!native_panel::host||!IsWindow(native_panel::host))EnumThreadWindows(main_thread,native_panel::find_host,reinterpret_cast<LPARAM>(&native_panel::host));
+ if(!native_panel::host||!IsWindow(native_panel::host))return;
+ if(native_category_registry::prepared){native_category_registry::set_host(native_panel::host);native_category_registry::tick();}
+ native_panel::diagnostic();
+ auto state=native_category_registry::status();json entries=json::array();for(const auto &item:native_category_registry::categories)if(item.present){bool opened=false;bool known=native_category_registry::category_open(item.id,&opened)==0;entries.push_back({{"id",item.id},{"visible",item.visible},{"openKnown",known},{"open",known&&opened}});}auto body=json{{"hostPid",GetCurrentProcessId()},{"mainThreadId",main_thread},{"ready",state.ready},{"binding",native_category_registry::prepare_result},{"toolbarCount",state.toolbar_count},{"paneCount",state.pane_count},{"categories",entries}}.dump(2);static std::string previous;if(body==previous)return;
+ std::ofstream output(root/L"outputs"/L"windows-category.json",std::ios::binary|std::ios::trunc);if(!output)return;output<<body;output.close();if(output)previous=body;
+}
 struct Provider{loader_editor_dispatch dispatch;void *owner;std::set<std::string> methods;json descriptor;};
 std::map<std::string,Provider> providers;
 struct Request{std::string method,arguments,provider;loader_json_completion completion;void *context;ULONGLONG deadline;std::atomic<bool> delivered{false};};
@@ -68,8 +85,8 @@ void namespace_receipt(){
  if(!managed)return;static uint64_t previous=UINT64_MAX;auto count=data_namespace::redirected.load()+data_namespace::other.load();if(count==previous)return;
  std::ofstream output(root/L"outputs"/L"windows-namespace.json",std::ios::binary|std::ios::trunc);if(!output)return;output<<json{{"mode","shell-entry-detours"},{"hostPid",GetCurrentProcessId()},{"redirectedQueries",data_namespace::redirected.load()},{"otherQueries",data_namespace::other.load()},{"lastOtherCSIDL",data_namespace::last_csidl.load()},{"lastOtherKnownId",data_namespace::last_known.load()}}.dump(2);output.close();if(output)previous=count;
 }
-void editor_receipt(){if(!managed)return;static unsigned attempts=0;static ULONGLONG attempted_at=0;auto now=GetTickCount64();auto state=editor_autostart::status();if(editor_start_result==LOADER_OK&&!state.scan_seen&&native_panel::host&&attempts<20&&now-attempted_at>=500){attempted_at=now;attempts++;editor_autostart::request_initial_scan();state=editor_autostart::status();}json value{{"hostPid",GetCurrentProcessId()},{"getenvGateResult",editor_gate_result},{"autostartResult",editor_start_result},{"installed",state.installed},{"scanSeen",state.scan_seen},{"runRequested",state.run_requested},{"scanAttempts",attempts},{"initialScanReason",state.initial_scan_reason},{"editorReady",editor_online()}};static std::string previous;auto body=value.dump(2);if(body==previous)return;std::ofstream output(root/L"outputs"/L"windows-editor.json",std::ios::binary|std::ios::trunc);if(!output)return;output<<body;output.close();if(output)previous=body;}
-LRESULT CALLBACK window_proc(HWND window,UINT message,WPARAM w,LPARAM l){if(message==WM_APP+1){dispatch_request((Request*)l);return 0;}if(message==WM_TIMER){if(editor_service)editor_service->tick();std::vector<Request*> expired;{std::lock_guard<std::mutex> guard(requests_mutex);for(auto &r:requests)if(!r->delivered&&GetTickCount64()>=r->deadline)expired.push_back(r.get());}for(auto r:expired)error(r,"TIMEOUT");namespace_receipt();editor_receipt();return 0;}return DefWindowProcW(window,message,w,l);}
+void editor_receipt(){if(!managed)return;static unsigned attempts=0;static ULONGLONG attempted_at=0;auto now=GetTickCount64();auto state=editor_autostart::status();if(editor_start_result==LOADER_OK&&!state.scan_seen&&editor_autostart::root_ready()&&attempts<20&&now-attempted_at>=500){attempted_at=now;attempts++;editor_autostart::request_initial_scan();state=editor_autostart::status();}json value{{"hostPid",GetCurrentProcessId()},{"getenvGateResult",editor_gate_result},{"autostartResult",editor_start_result},{"installed",state.installed},{"scanSeen",state.scan_seen},{"runRequested",state.run_requested},{"scanAttempts",attempts},{"initialScanReason",state.initial_scan_reason},{"editorReady",editor_online()}};static std::string previous;auto body=value.dump(2);if(body==previous)return;std::ofstream output(root/L"outputs"/L"windows-editor.json",std::ios::binary|std::ios::trunc);if(!output)return;output<<body;output.close();if(output)previous=body;}
+LRESULT CALLBACK window_proc(HWND window,UINT message,WPARAM w,LPARAM l){if(message==WM_APP+1){dispatch_request((Request*)l);return 0;}if(message==WM_TIMER){if(editor_service)editor_service->tick();std::vector<Request*> expired;{std::lock_guard<std::mutex> guard(requests_mutex);for(auto &r:requests)if(!r->delivered&&GetTickCount64()>=r->deadline)expired.push_back(r.get());}for(auto r:expired)error(r,"TIMEOUT");category_tick();namespace_receipt();editor_receipt();return 0;}return DefWindowProcW(window,message,w,l);}
 int network_state(loader_network_state_v1 *state){if(!state||state->abi_version!=1||state->struct_size<sizeof *state)return LOADER_ERR_INVALID;*state={1,sizeof *state,1,0,LOADER_NET_WINHTTP|LOADER_NET_WININET|LOADER_NET_WINSOCK|LOADER_NET_WEBVIEW2,0,0,0,0};return 0;}
 int verify(uint64_t generation,loader_network_state_v1 *state){int result=network_state(state);if(result)return result;return generation!=state->generation?LOADER_ERR_STALE_GENERATION:LOADER_ERR_NETWORK_UNVERIFIED;}
 int block(int){return LOADER_ERR_NOT_SUPPORTED;}int blocked(){return 0;}
@@ -119,11 +136,14 @@ bool flag_enabled(const wchar_t *key){wchar_t value[4]{};return GetEnvironmentVa
 bool read_path(const wchar_t *key,fs::path &out){wchar_t path[32768]{};DWORD n=GetEnvironmentVariableW(key,path,32768);if(!n||n>=32768)return false;fs::path parsed(path);if(!parsed.is_absolute()||!parsed.has_root_name())return false;out=parsed.lexically_normal();return out.native().size()<32768;}
 void startup_receipt(){std::error_code ec;auto directory=root/L"outputs";fs::create_directories(directory,ec);if(ec||!regular(directory,true)){log_message("runtime-receipt-directory-unavailable");return;}auto file=directory/L"windows-runtime.json";if(fs::exists(file,ec)&&!regular(file)){log_message("runtime-receipt-path-invalid");return;}std::ofstream stream(file,std::ios::binary|std::ios::trunc);if(!stream){log_message("runtime-receipt-write-failed");return;}stream<<json{{"hostPid",GetCurrentProcessId()},{"mainThreadId",main_thread},{"appContainer",app_container},{"managed",managed},{"hostDataNamespace",managed},{"pluginUi",true},{"packages",package_results}}.dump(2);stream.close();if(!stream)log_message("runtime-receipt-write-failed");}
 }
+void loader_category_before_root(){if(managed&&on_main()){if(native_category_registry::prepare(reinterpret_cast<unsigned char*>(GetModuleHandleW(nullptr)),main_thread,category_update,category_remove))category_sync();else log_message("native-category-unavailable");}}
+void loader_category_after_root(){if(managed&&on_main())category_tick();}
+void loader_category_cleanup_root(){if(managed&&on_main())native_category_registry::set_host(nullptr);}
 extern "C" __declspec(dllexport) int ExtendInitialize(void*){
  if(dispatcher)return main_thread==GetCurrentThreadId()?0:LOADER_ERR_INVALID;
  app_container=token_is_app_container();managed=flag_enabled(L"OPEN_SV2_WINDOWS_MANAGED");if(managed&&!app_container)return LOADER_ERR_NOT_SUPPORTED;if(!managed&&!flag_enabled(L"OPEN_SV2_WINDOWS_FIXTURE"))return LOADER_ERR_NOT_SUPPORTED;
  main_thread=GetCurrentThreadId();if(!read_path(L"OPEN_SV2_LOADER_DATA_DIR",root))return LOADER_ERR_STORAGE_NOT_CONFIGURED;if(!regular(root,true))return LOADER_ERR_INVALID;
- if(managed){fs::path actual;if(!read_path(L"OPEN_SV2_HOST_DATA_DIR",actual)||CompareStringOrdinal(actual.c_str(),-1,(root/L"host-data").c_str(),-1,TRUE)!=CSTR_EQUAL||!regular(actual,true)||actual.native().size()+10>=MAX_PATH||!data_namespace::install(actual.wstring()))return LOADER_ERR_INVALID;host_directory=actual.u8string();}
+ if(managed){fs::path actual;if(!read_path(L"OPEN_SV2_HOST_DATA_DIR",actual)||CompareStringOrdinal(actual.c_str(),-1,(root/L"host-data").c_str(),-1,TRUE)!=CSTR_EQUAL||!regular(actual,true)||actual.native().size()+12>=MAX_PATH||!data_namespace::install(actual.wstring()))return LOADER_ERR_INVALID;host_directory=actual.u8string();}
  WNDCLASSW cls{};cls.lpfnWndProc=window_proc;cls.hInstance=GetModuleHandleW(nullptr);cls.lpszClassName=L"SV2Extend.Resident.Dispatch.v1";
  if(!RegisterClassW(&cls))return LOADER_ERR_INVALID;
  dispatcher=CreateWindowExW(0,cls.lpszClassName,L"",0,0,0,0,0,HWND_MESSAGE,nullptr,cls.hInstance,nullptr);if(!dispatcher||!SetTimer(dispatcher,1,100,nullptr)||native_panel::install(dispatcher,root.c_str())!=LOADER_OK)return LOADER_ERR_INVALID;
@@ -134,6 +154,7 @@ extern "C" __declspec(dllexport) int ExtendInitialize(void*){
  api.listen_local_json=listen;api.stop_local_json=stop;api.host_data_directory=host_data;api.register_plugin_ui=native_panel::register_ui;api.unregister_plugin_ui=native_panel::unregister_ui;api.update_plugin_ui=native_panel::update_ui;
  api.set_startup_network_guard=guard;api.get_startup_network_policy=policy;api.list_startup_network_guards=guards;api.acquire_profile_exclusive=lease;api.release_profile_exclusive=lease;api.get_profile_lease_state=lease_state;api.retire_host_web_renderers=retire_web;api.retire_host_web_contexts=retire_web;api.plugin_storage_write_scoped=storage_scoped;api.plugin_storage_read_scoped=storage_read;
  if(managed){editor_service=std::make_unique<editor_lua::Service>(&api);editor_gate_result=editor_gate::install(editor_service.get());if(editor_gate_result==LOADER_OK){auto entry=root/L"host-data"/L"Roaming"/L"Dreamtonics"/L"Synthesizer V Studio 2"/L"scripts"/L"opensv2-loader-runtime.lua";editor_start_result=editor_autostart::install(editor_service.get(),entry.c_str());}}
+ native_panel::set_categories_changed(category_sync);native_panel::set_open_category(native_category_registry::open_category);
  load_packages();startup_receipt();log_message("windows-resident-ready");return 0;
 }
 extern "C" __declspec(dllexport) const loader_api_v1 *ExtendGetAPI(){return dispatcher?&api:nullptr;}

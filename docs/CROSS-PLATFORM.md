@@ -34,7 +34,7 @@
 | 共享 C ABI、平台包选择 | 本机验证 | 独立 fixture 实机验证 |
 | 启动器拉起宿主并退出 | SV2 验证 | 官方 2.3.0 隔离副本实机验证 |
 | 宿主内 provider 注册/请求 | SV2 验证 | fixture 请求和正式宿主插件初始化验证 |
-| 动态原生右侧面板 | 2.3.0 arm64 验证 | Win32 子窗口与插件 UI 已接入 |
+| 动态原生右侧面板 | 2.3.0 arm64 验证 | 官方 2.3.0 隔离宿主验证分类、停靠、缩放及状态刷新 |
 | MCP、Lua、JS 原生宿主接入 | SV2 验证 | MCP 与内部官方 Lua 后端已验证；JS 未适配 |
 | 声库、pitch、导出后端 | SV2 验证 | 音符组、音符与 pitch 已验证；声库及导出未适配 |
 | 托管数据目录重定向 | SV2 验证 | AppContainer 与主程序 Shell 路径重定向验证 |
@@ -45,7 +45,9 @@ Windows 支持 `--host <official-synthv-studio.exe> <profile-directory>`。启�
 
 当前后端以离线模式运行，动态联网开发中。AppContainer 也限制对 profile 之外项目路径的访问。
 
-Windows MCP 服务驻留在 SV2 内，原生侧栏提供状态与连接命令。客户端使用 `Native/Sv2Mcp.exe --endpoint Profile/outputs/mcp-endpoint.json` 建立 stdio 连接；该程序只转发 MCP，无常驻管理逻辑。内部官方 Lua 后端自动启动，用户无需运行脚本或使用 Lua 面板。入口有官方 2.3.0 的版本与字节校验，后端未就绪时不公布工具。
+Windows MCP 服务驻留在 SV2 内。右侧工具栏接入宿主原生 Extend 分类及独立插件分类，面板内容由跟随宿主停靠区域的 Win32 控件渲染；插件使用相同的声明式 UI API，不直接使用宿主控件。官方 2.3.0 隔离宿主已验证分类打开和关闭，以及实际屏幕缩放 100%→150%→100% 时的面板与字体尺寸；重复提交相同插件状态时焦点和滚动位置保持。客户端使用 `Native/Sv2Mcp.exe --endpoint Profile/outputs/mcp-endpoint.json` 建立 stdio 连接；该程序只转发 MCP，无常驻管理逻辑。内部官方 Lua 后端自动启动，用户无需运行脚本或使用 Lua 面板。入口有官方 2.3.0 的版本与字节校验，后端未就绪时不公布工具。
+
+Windows 插件设置和右侧入口显隐保存在 profile 的 `preferences/windows-plugin-ui.json`；macOS 使用 `preferences/extend-ui.json`。两平台保持同一 SDK 契约，各自渲染面板内容。
 
 已在真实隔离宿主验证读取工程、创建普通音符组、添加与删除音符、音高及 pitchDelta 编辑、过期 guard 拒绝与测试内容清理。主组添加/删除音符会在调用原版前拒绝。声库选择和 WAV 导出尚未开放。
 
@@ -70,7 +72,7 @@ Windows 启动采用 suspended 主线程 + pre-start APC，代码在 `DllMain` �
 
 JSON 依赖固定为 nlohmann/json 3.11.3，Shell 与编辑器入口使用 MinHook；许可证随构建的 THIRD-PARTY-NOTICES.txt 提供。构建不会下载或分发官方 SV2。
 
-SDK 的 64 位 API 表现为 264 字节，新增 WebKit 上下文回收函数在尾部偏移 240；另有命名空间存储读写在偏移 248/256，旧字段位置保持。macOS arm64/x86_64 与 Windows x64 ABI 静态检查通过；Windows 正式宿主已经加载 Core 与私有状态面板，未实现的 API 继续返回 NOT_SUPPORTED。
+SDK 的 64 位 API 表现为 264 字节，新增 WebKit 上下文回收函数在尾部偏移 240；另有命名空间存储读写在偏移 248/256，旧字段位置保持。macOS arm64/x86_64 与 Windows x64 ABI 静态检查通过；Windows 官方隔离宿主已验证 Core、插件和原生分类面板。未实现的 API 继续返回 NOT_SUPPORTED。
 
 ## Windows 安装
 

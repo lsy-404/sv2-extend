@@ -9,7 +9,7 @@ if args.delay_launcher_source:
  if text.count(needle)!=1: raise RuntimeError('launcher polling point not found')
  instrumented=root/'launcher.cpp';instrumented.write_text(text.replace(needle,'Sleep(250);'+needle),encoding='utf-8')
  original_build=build;build=root/'delayed-build';build.mkdir();shutil.copyfile(original_build/'ExtendCore.dll',build/'ExtendCore.dll')
- compile_file('-Wno-cast-function-type','-Wno-misleading-indentation','-I'+str(source.parent),'-I'+str(original_build),'-municode',instrumented,'-o',build/'ExtendLauncher.exe','-luserenv','-ladvapi32','-lshell32','-lole32','-luuid')
+ compile_file('-Wno-cast-function-type','-Wno-misleading-indentation','-I'+str(source.parent),'-I'+str(original_build),'-municode',instrumented,'-o',build/'ExtendLauncher.exe','-luserenv','-ladvapi32','-lshell32','-lole32','-loleaut32','-luuid')
 compile_file('-municode',tests/'windows_fatal_startup_host.cpp','-o',hostdir/'FatalStartupHost.exe','-lshell32','-lole32','-luuid')
 for fatal in (False,True):
  dll=root/('fatal.dll' if fatal else 'control.dll');flags=['-DFATAL_STARTUP'] if fatal else []
