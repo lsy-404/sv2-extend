@@ -1,6 +1,12 @@
 # 网络控制验证状态
 
-已安装版本为 0.9.10；网络整体覆盖仍未完成。
+## Windows 受管宿主
+
+官方 Windows 2.3.0 受管宿主支持运行时阻断与恢复联网。策略状态通过 `get_host_network_policy` 区分请求、已应用、待处理和错误；`get_host_network_state` 与 `verify_host_network_quiescence` 另行报告排空和验证结果。已在真实宿主验证 WebView 环境及 controller 回调、原生 Close、受管 Job 中无其他成员、当前宿主 IP 活动连接为零，并在阻断策略生效后读回 `whole_host_verified=1`；恢复联网后可重新在线运行。
+
+该验证适用于官方 2.3.0 已支持的导入入口、受管 Job 及完整匹配的宿主防火墙规则。存在未知子进程、待决 WebView 回调、未关闭连接或规则不匹配时不能将其视为已验证；不覆盖其他宿主或任意原生插件的全部联网行为。
+
+## macOS 覆盖
 
 当前 arm64 Swift NWConnectionGroup 已接入统一策略：
 
@@ -74,4 +80,4 @@ Swift start/restart 使用覆盖实际 SDK 调用的接入 lease，避免许可�
 
 ## WebKit 网络上下文（已安装 0.9.9）
 
-新增独立 `retire_host_web_contexts`，在原有 renderer-only API 之外显式回收观察到的 WebKit 网络进程，保持原接口语义。真实SV2 27项检查通过，包含旧接口仍留下网络进程的对照、启动代理无PID窗口的独立控制检查、真实两类PID退出、待决JS一次原生错误、持久测试cookie保留及网络进程恢复。store弱观察11项、无PID/未知进程拒绝10项检查通过。SDK248字节及Windows x64交叉编译通过，Windows运行时仍NOT_SUPPORTED。此结果不覆盖全部WK客户端回调、持久Web身份切换或其他联网路径；未清除未验证位。见 [接口与验证范围](WEB-CONTEXTS.md)。
+新增独立 `retire_host_web_contexts`，在原有 renderer-only API 之外显式回收观察到的 WebKit 网络进程，保持原接口语义。真实SV2 27项检查通过，包含旧接口仍留下网络进程的对照、启动代理无PID窗口的独立控制检查、真实两类PID退出、待决JS一次原生错误、持久测试cookie保留及网络进程恢复。store弱观察11项、无PID/未知进程拒绝10项检查通过。当时的 SDK 及 Windows x64 交叉编译通过；Windows 当前实现见 [接口与验证范围](WEB-CONTEXTS.md)。此结果不覆盖全部WK客户端回调、持久Web身份切换或其他联网路径；未清除未验证位。见 [接口与验证范围](WEB-CONTEXTS.md)。

@@ -55,4 +55,4 @@ Extend.exports.snapshot(function(snapshot, err)
   end)
 end)
 
-Windows 2.3.0 的隔离宿主已验证 MCP、官方 Lua 和 JS 的原生 WAV 导出与非静音 PCM；取消行为需以当前宿主的最终状态确认。新共享代码尚未在 macOS 宿主复测。
+Windows 2.3.0 的隔离宿主已验证 MCP、官方 Lua 和 JS 的原生 WAV 导出与非静音 PCM；真实取消已验证终态为 cancelled、configRestored 为 true 且未发布输出。macOS 新增的导出与 profile 独占租约互斥保护已实现，尚待真实宿主验证。
