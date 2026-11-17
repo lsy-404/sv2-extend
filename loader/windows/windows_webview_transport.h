@@ -109,7 +109,7 @@ inline bool configuration_supported(){
  std::wstring command=GetCommandLineW();for(auto &ch:command)ch=static_cast<wchar_t>(towlower(ch));if(command.find(L"--edge-webview-switches")!=std::wstring::npos)return false;
  wchar_t exe[32768];n=GetModuleFileNameW(nullptr,exe,32768);if(!n||n>=32768)return false;auto app=std::filesystem::path(exe).filename().wstring();
  for(HKEY root:{HKEY_CURRENT_USER,HKEY_LOCAL_MACHINE})for(REGSAM view:{REGSAM(KEY_WOW64_32KEY),REGSAM(KEY_WOW64_64KEY)}){
-  for(const wchar_t *name:{L"ProxySettings",L"ProxyMode",L"ProxyServer",L"ProxyPacUrl",L"ProxyBypassList",L"WebRtcIPHandling",L"WebRtcIPHandlingUrl",L"WebRtcLocalIpsAllowedUrls"})
+  for(const wchar_t *name:{L"ProxySettings",L"ProxyMode",L"ProxyServer",L"ProxyPacUrl",L"ProxyBypassList",L"WebRtcIPHandling",L"WebRtcIPHandlingUrl",L"WebRtcLocalhostIpHandling",L"WebRtcLocalIpsAllowedUrls"})
    if(registry_value_present(root,L"SOFTWARE\\Policies\\Microsoft\\Edge",name,view))return false;
   for(const wchar_t *key:{L"SOFTWARE\\Policies\\Microsoft\\Edge\\ProxySettings",L"SOFTWARE\\Policies\\Microsoft\\Edge\\ProxyOverrideRules",L"SOFTWARE\\Policies\\Microsoft\\Edge\\WebRtcIPHandlingUrl"})if(registry_key_present(root,key,view))return false;
   for(const wchar_t *key:{L"SOFTWARE\\Policies\\Microsoft\\Edge\\WebView2\\AdditionalBrowserArguments",L"SOFTWARE\\Policies\\Microsoft\\Edge\\WebView2\\UserDataFolder",L"SOFTWARE\\Policies\\Microsoft\\Edge\\WebView2\\BrowserExecutableFolder"})
