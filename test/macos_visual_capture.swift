@@ -68,8 +68,8 @@ import UniformTypeIdentifiers
                 }
                 let filter = SCContentFilter(desktopIndependentWindow: target)
                 let config = SCStreamConfiguration()
-                config.width = max(1, Int(target.frame.width * 2))
-                config.height = max(1, Int(target.frame.height * 2))
+                config.width = max(1, Int(ceil(filter.contentRect.width * CGFloat(filter.pointPixelScale))))
+                config.height = max(1, Int(ceil(filter.contentRect.height * CGFloat(filter.pointPixelScale))))
                 config.showsCursor = false
                 let image = try await SCScreenshotManager.captureImage(contentFilter: filter, configuration: config)
                 guard let destination = CGImageDestinationCreateWithURL(output as CFURL, UTType.png.identifier as CFString, 1, nil) else {
