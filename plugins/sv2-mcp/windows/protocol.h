@@ -1,11 +1,16 @@
 #pragma once
 #include <memory>
+#include <mutex>
 #include <string>
 #include "../../../loader/windows/vendor/json.hpp"
 #include "../../../sdk/include/loader_api.h"
 
 namespace windows_mcp {
 using json = nlohmann::json;
+inline std::mutex settings_mutex;
+inline json settings=json::object();
+inline void set_settings(const json &value){std::lock_guard<std::mutex> lock(settings_mutex);settings=value.is_object()?value:json::object();}
+inline bool enabled(const std::string &key){std::lock_guard<std::mutex> lock(settings_mutex);auto it=settings.find(key);return it==settings.end() || !it->is_boolean() || it->get<bool>();}
 struct Request {
  const loader_api_v1 *api;
  loader_json_completion complete;
@@ -21,6 +26,7 @@ inline void error(Request *request,int code,const char *message) {
 }
 inline void called(const char *body,size_t length,void *opaque) {
  auto request=static_cast<Request*>(opaque);
+ if(!enabled("enabled")){error(request,-32001,"MCP is disabled");return;}
  auto value=body?json::parse(body,body+length,nullptr,false):json();
  if(!value.is_object() || !value.contains("ok") || !value["ok"].is_boolean()) {error(request,-32603,"Invalid provider response");return;}
  json result={{"content",json::array({{{"type","text"},{"text",value.dump()}}})},{"structuredContent",value},{"isError",!value["ok"].get<bool>()}};
@@ -28,6 +34,7 @@ inline void called(const char *body,size_t length,void *opaque) {
 }
 inline void capabilities(const char *body,size_t length,void *opaque) {
  auto request=static_cast<Request*>(opaque);
+ if(!enabled("enabled")){error(request,-32001,"MCP is disabled");return;}
  auto value=body?json::parse(body,body+length,nullptr,false):json();
  if(!value.is_object() || !value.contains("ok") || !value["ok"].is_boolean() || !value["ok"].get<bool>() || !value.contains("result") || !value["result"].is_object() || !value["result"].contains("providers") || !value["result"]["providers"].is_array()) {error(request,-32603,"Capability registry unavailable");return;}
  json tools=json::array();std::string method;
@@ -37,6 +44,7 @@ inline void capabilities(const char *body,size_t length,void *opaque) {
   if(!caps.contains("methods") || !caps["methods"].is_array() || !caps.contains("tools") || !caps["tools"].is_array()) continue;
   for(const auto &definition:caps["tools"]) {
    if(!definition.is_object() || !definition.contains("name") || !definition["name"].is_string() || !definition.contains("method") || !definition["method"].is_string() || !definition.contains("description") || !definition["description"].is_string() || !definition.contains("inputSchema") || !definition["inputSchema"].is_object()) continue;
+   if(!enabled("method."+definition["method"].get<std::string>())){if(!request->list && definition["name"]==request->params["name"]) {error(request,-32002,"Tool is disabled in Extend settings");return;}continue;}
    bool available=false;for(const auto &entry:caps["methods"])if(entry==definition["method"])available=true;
    if(!available)continue;
    if(request->list){auto tool=definition;tool.erase("method");tools.push_back(tool);}
@@ -59,6 +67,7 @@ inline void handle(const loader_api_v1 *api,const char *body,size_t length,loade
  if(!request->id.is_string() && !request->id.is_number_integer()){request->id=nullptr;error(request,-32600,"Invalid request id");return;}
  if(value.contains("params") && !value["params"].is_object()){error(request,-32602,"Invalid parameters");return;}
  request->params=value.value("params",json::object());auto method=value["method"].get<std::string>();
+ if(!enabled("enabled")){error(request,-32001,"MCP is disabled");return;}
  if(method=="initialize") {
   auto version=request->params.value("protocolVersion",json("2025-11-25"));
   if(!version.is_string() || (version!="2025-11-25" && version!="2025-06-18" && version!="2025-03-26"))version="2025-11-25";

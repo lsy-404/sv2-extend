@@ -15,5 +15,12 @@ int main(){
  auto list=call(&api,R"({"jsonrpc":"2.0","id":1,"method":"tools/list"})");assert(list["result"]["tools"].size()==1);assert(list["result"]["tools"][0]["name"]=="svext_read");assert(!list["result"]["tools"][0].contains("method"));
  auto result=call(&api,R"({"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"svext_read"}})");assert(result["result"]["structuredContent"]["ok"]==true);
  auto missing=call(&api,R"({"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"svext_missing"}})");assert(missing["error"]["code"]==-32602);
+ windows_mcp::set_settings({{"method.notes.read",false}});
+ auto disabled_list=call(&api,R"({"jsonrpc":"2.0","id":5,"method":"tools/list"})");assert(disabled_list["result"]["tools"].empty());
+ auto disabled_tool=call(&api,R"({"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"svext_read"}})");assert(disabled_tool["error"]["code"]==-32002);
+ windows_mcp::set_settings({{"enabled",false}});
+ auto disabled=call(&api,R"({"jsonrpc":"2.0","id":7,"method":"initialize"})");assert(disabled["error"]["code"]==-32001);
+ windows_mcp::set_settings(json::object());
+ auto restored=call(&api,R"({"jsonrpc":"2.0","id":8,"method":"tools/list"})");assert(restored["result"]["tools"].size()==1);
  auto bad=call(&api,R"({"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"svext_read","arguments":[]}})");assert(bad["error"]["code"]==-32602);
 }

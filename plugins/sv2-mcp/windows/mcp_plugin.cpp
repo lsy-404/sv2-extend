@@ -14,26 +14,29 @@ std::atomic<bool> server_running{false};
 HWND panel_dispatcher=nullptr;
 HWND startup_dispatcher=nullptr;
 bool panel_pending=false;
+bool show_command=false;
 std::string editor_status="Editor: checking";
 std::vector<std::string> command_lines;
 std::string utf8(const std::wstring& value){int size=WideCharToMultiByte(CP_UTF8,WC_ERR_INVALID_CHARS,value.data(),int(value.size()),nullptr,0,nullptr,nullptr);if(size<=0)return {};std::string result(size,'\0');if(!WideCharToMultiByte(CP_UTF8,WC_ERR_INVALID_CHARS,value.data(),int(value.size()),result.data(),size,nullptr,nullptr))return {};return result;}
 windows_mcp::json panel_sidebar(){
- auto rows=windows_mcp::json::array({{{"type","label"},{"text",editor_status}},{{"type","label"},{"text","MCP stdio command:"}}});
- for(const auto& line:command_lines)rows.push_back({{"type","label"},{"text",line}});
+ auto rows=windows_mcp::json::array({{{"type","label"},{"text",editor_status}}});
+ if(show_command){rows.push_back({{"type","label"},{"text","MCP stdio command:"}});for(const auto& line:command_lines)rows.push_back({{"type","label"},{"text",line}});}
  rows.push_back({{"type","button"},{"id","refresh"},{"text","Refresh"}});
  return {{"title","MCP"},{"rows",rows}};
 }
-void panel_update(){auto body=windows_mcp::json{{"status",server_running?"Listening":"Unavailable"},{"sidebar",panel_sidebar()}}.dump();loader->update_plugin_ui("sv2.mcp",body.c_str(),nullptr);}
+void panel_update(){auto body=windows_mcp::json{{"status",!windows_mcp::enabled("enabled")?(server_running?"Disabled (listener active)":"Disabled"):server_running?"Listening":"Unavailable"},{"sidebar",panel_sidebar()}}.dump();loader->update_plugin_ui("sv2.mcp",body.c_str(),nullptr);}
 void panel_complete(const char* body,size_t length,void*){auto response=new std::string;if(body&&length<=1048576)response->assign(body,length);if(!PostMessageW(panel_dispatcher,WM_APP+1,0,reinterpret_cast<LPARAM>(response)))delete response;}
 void panel_refresh(){if(panel_pending)return;panel_pending=true;editor_status="Editor: checking";panel_update();loader->request_capability_json("editor.capabilities","{}",panel_complete,nullptr);}
-void panel_event(const char* body,void*){auto value=body?windows_mcp::json::parse(body,nullptr,false):windows_mcp::json();if(value.is_object()&&value.value("kind","")=="action"&&value.value("action","")=="refresh")panel_refresh();}
+void panel_event(const char* body,void*){auto value=body?windows_mcp::json::parse(body,nullptr,false):windows_mcp::json();if(!value.is_object())return;if(value.value("kind","")=="settings"&&value.contains("settings")&&value["settings"].is_object()){windows_mcp::set_settings(value["settings"]);show_command=value["settings"].value("showEndpoint",false);panel_update();}else if(value.value("kind","")=="action"&&value.value("action","")=="refresh")panel_refresh();}
 LRESULT CALLBACK panel_proc(HWND window,UINT message,WPARAM w,LPARAM l){if(message==WM_APP+1){std::unique_ptr<std::string> response(reinterpret_cast<std::string*>(l));panel_pending=false;auto value=windows_mcp::json::parse(*response,nullptr,false);editor_status="Editor: unavailable";if(value.is_object()&&value.value("ok",false)&&value.contains("result")&&value["result"].is_object()){auto& result=value["result"];if(result.contains("editorReady")&&result["editorReady"].is_boolean())editor_status=result["editorReady"].get<bool>()?"Editor: ready":"Editor: not ready";}panel_update();return 0;}return DefWindowProcW(window,message,w,l);}
 void install_panel(){
  if(!(loader->capabilities&LOADER_CAP_PLUGIN_UI)||loader->struct_size<offsetof(loader_api_v1,update_plugin_ui)+sizeof(loader->update_plugin_ui)||!loader->register_plugin_ui||!loader->update_plugin_ui)return;
  wchar_t root[32768],core[32768];DWORD n=GetEnvironmentVariableW(L"OPEN_SV2_LOADER_DATA_DIR",root,32768);HMODULE module=GetModuleHandleW(L"ExtendCore.dll");DWORD m=module?GetModuleFileNameW(module,core,32768):0;
  if(n&&n<32768&&m&&m<32768){auto executable=std::filesystem::path(core).parent_path()/L"Sv2Mcp.exe";auto endpoint=std::filesystem::path(root)/L"outputs"/L"mcp-endpoint.json";std::wstring command=L"\""+executable.wstring()+L"\" --endpoint \""+endpoint.wstring()+L"\"";for(size_t i=0;i<command.size()&&command_lines.size()<28;i+=38)command_lines.push_back(utf8(command.substr(i,38)));}else command_lines.push_back("Command unavailable");
  WNDCLASSW cls{};cls.lpfnWndProc=panel_proc;cls.hInstance=GetModuleHandleW(nullptr);cls.lpszClassName=L"SV2ExtendMcpPanelDispatch";if(!RegisterClassW(&cls)&&GetLastError()!=ERROR_CLASS_ALREADY_EXISTS)return;panel_dispatcher=CreateWindowExW(0,cls.lpszClassName,L"",0,0,0,0,0,HWND_MESSAGE,nullptr,cls.hInstance,nullptr);if(!panel_dispatcher)return;
- auto descriptor=windows_mcp::json{{"id","sv2.mcp"},{"name","MCP"},{"version","0.3.0"},{"status",server_running?"Listening":"Unavailable"},{"sidebar",panel_sidebar()},{"settings",windows_mcp::json::array()}}.dump();if(loader->register_plugin_ui(descriptor.c_str(),panel_event,nullptr)!=LOADER_OK){DestroyWindow(panel_dispatcher);panel_dispatcher=nullptr;return;}panel_refresh();
+ auto fields=windows_mcp::json::array({{{"key","enabled"},{"title","启用 MCP"},{"type","boolean"},{"default",true}},{{"key","showEndpoint"},{"title","侧栏显示连接命令"},{"type","boolean"},{"default",false}}});
+ for(const auto *method:{"selection.read","groups.create","groups.remove","notes.set_pitch","notes.add","notes.remove","pitch.read_range","pitch.replace_range"})fields.push_back({{"key",std::string("method.")+method},{"title",method},{"type","boolean"},{"default",true}});
+ auto descriptor=windows_mcp::json{{"id","sv2.mcp"},{"name","MCP"},{"version","0.3.0"},{"status",!windows_mcp::enabled("enabled")?(server_running?"Disabled (listener active)":"Disabled"):server_running?"Listening":"Unavailable"},{"sidebar",panel_sidebar()},{"settings",fields}}.dump();if(loader->register_plugin_ui(descriptor.c_str(),panel_event,nullptr)!=LOADER_OK){DestroyWindow(panel_dispatcher);panel_dispatcher=nullptr;return;}panel_refresh();
 }
 struct Pending {
  std::atomic<int> refs{2};HANDLE event=CreateEventW(nullptr,TRUE,FALSE,nullptr);std::string response;
