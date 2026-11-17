@@ -12,12 +12,11 @@
 #include <stdint.h>
 #include <string.h>
 #include <sys/stat.h>
-extern "C" NSView *loader_extend_control_view(void);
-extern "C" NSView *loader_extend_scripts_view(void);
-extern "C" NSView *loader_extend_plugin_view(NSString*);
+extern "C" bool loader_native_panel_owns(void*,void*);
+extern "C" void loader_native_panel_remove(void*);
+extern "C" void loader_native_panel_capture(void*,NSString*,bool,intptr_t);
 extern "C" NSDictionary *loader_plugin_ui_call(NSString*,NSDictionary*);
 extern "C" const char *loader_host_data_directory(void);
-extern "C" void loader_extend_control_refresh(NSView*);
 #if defined(__arm64__)
 namespace {
 static intptr_t slide;
@@ -25,7 +24,7 @@ static intptr_t slide;
 // handle; dormant handles are hidden and consume no toolbar space.
 struct Category {void *registry[8],*descriptorTable[28];void **object;char identifier[97],label[513];bool present,visible;uint64_t renderedGeneration;};
 static Category categories[33];
-static NSMutableDictionary<NSValue*,NSView*> *panes;
+static NSMutableSet<NSValue*> *panes;
 static NSMutableSet<NSValue*> *bars;
 static NSTimer *timer;
 static NSNumber *lastGeneration;
@@ -49,29 +48,34 @@ static const char javascriptSVG[]="<svg xmlns=\"http://www.w3.org/2000/svg\" wid
 static const char luaSVG[]="<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"24\" height=\"24\" viewBox=\"0 0 24 24\"><rect width=\"24\" height=\"24\" fill=\"#000000\" opacity=\"0\"/><g transform=\"translate(3 3) scale(.75)\"><path fill=\"#000000\" fill-rule=\"evenodd\" d=\"M19 13a8 8 0 1 1-16 0 8 8 0 0 1 16 0z M17 10a3 3 0 1 1-6 0 3 3 0 0 1 6 0z\"/><circle cx=\"21\" cy=\"3\" r=\"2\" fill=\"#000000\"/></g></svg>";
 static const char mcpSVG[]="<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"24\" height=\"24\" viewBox=\"0 0 24 24\"><rect width=\"24\" height=\"24\" fill=\"#000000\" opacity=\"0\"/><g transform=\"translate(3 3) scale(.75)\" fill=\"none\" stroke=\"#000000\" stroke-width=\"1.5\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><circle cx=\"5\" cy=\"12\" r=\"3\"/><circle cx=\"19\" cy=\"5\" r=\"3\"/><circle cx=\"19\" cy=\"19\" r=\"3\"/><path d=\"m8 10 8-4M8 14l8 4\"/></g></svg>";
 static Drawable icon(void *self){auto c=fromSelf(self);const char *svg=c==categories?rootSVG:c&&!strcmp(c->identifier,"opensv2.javascript-extend")?javascriptSVG:c&&!strcmp(c->identifier,"opensv2.lua-extend")?luaSVG:c&&!strcmp(c->identifier,"opensv2.mcp")?mcpSVG:pluginSVG;return ((Drawable(*)(const void*,size_t))(slide+0x10080a154ULL))(svg,strlen(svg));}
-static void remove(void *pane){NSValue *key=[NSValue valueWithPointer:pane];[panes[key] removeFromSuperview];[panes removeObjectForKey:key];}
-static NSMutableDictionary<NSString*,NSValue*> *windowAXImplementations;
-static id windowChildren(id window,SEL selector){IMP original=(IMP)[windowAXImplementations[NSStringFromClass([window class])] pointerValue];NSArray *base=original?((id(*)(id,SEL))original)(window,selector):@[];NSMutableArray *result=[base mutableCopy]?:[NSMutableArray array];for(NSView *view in panes.allValues)if(view.window==window&&!view.isHidden)[result addObject:view];return result;}
-static void exposeAccessibility(NSWindow *window){Class klass=window.class;NSString *key=NSStringFromClass(klass);if(![key hasPrefix:@"JUCEWindow"]||windowAXImplementations[key])return;Method method=class_getInstanceMethod(klass,@selector(accessibilityChildren));if(!method)return;if(!windowAXImplementations)windowAXImplementations=[NSMutableDictionary dictionary];windowAXImplementations[key]=[NSValue valueWithPointer:(const void*)method_getImplementation(method)];if(!class_addMethod(klass,@selector(accessibilityChildren),(IMP)windowChildren,method_getTypeEncoding(method))){[windowAXImplementations removeObjectForKey:key];}}
-static bool bounds(void *pane,NSRect *result,NSSize *rootSize){
- char *node=(char*)pane;int x=0,y=0;bool visible=true;unsigned depth=0;
- while(node&&depth++<128){visible=visible&&(*(uint16_t*)(node+0xe8)&2);char *parent=*(char**)(node+0x30);if(!parent){*rootSize=NSMakeSize(*(int*)(node+0x40),*(int*)(node+0x44));break;}x+=*(int*)(node+0x38);y+=*(int*)(node+0x3c);node=parent;}
- int width=*(int*)((char*)pane+0x40),height=*(int*)((char*)pane+0x44);*result=NSMakeRect(x,y+44,width,MAX(0,height-44));return visible&&depth<128&&width>0&&height>44;
+static void remove(void *pane){
+ loader_native_panel_remove(pane);
+ [panes removeObject:[NSValue valueWithPointer:pane]];
 }
-static void layout(void *pane){bool script=paneIndex(pane)<0;int count=*(int*)((char*)pane+0x54);void **children=*(void***)((char*)pane+0x48);if(count>=0&&count<=128)for(int i=0;i<count;i++){void *child=children[i];if(!script){if(*(uint16_t*)((char*)child+0xe8)&2)((void(*)(void*,bool))(*(void***)child)[0x60/8])(child,false);}else{int x=*(int*)((char*)child+0x38),y=*(int*)((char*)child+0x3c),w=*(int*)((char*)child+0x40),h=*(int*)((char*)child+0x44);int bottom=*(int*)((char*)pane+0x44)-38;if(h>40&&y+h>bottom)((void(*)(void*,int,int,int,int))(slide+0x1007ff7dcULL))(child,x,y,w,MAX(0,bottom-y));}}
- NSView *view=panes[[NSValue valueWithPointer:pane]];if(!view)return;NSRect rect;NSSize root;bool showing=bounds(pane,&rect,&root);NSWindow *window=nil;
- for(NSWindow *candidate in NSApp.windows){NSSize size=candidate.contentView.bounds.size;if(fabs(size.width-root.width)<2&&fabs(size.height-root.height)<2&&candidate.isVisible){window=candidate;break;}}
- if(!window||!showing){view.hidden=YES;return;}exposeAccessibility(window);NSView *parent=window.contentView;if(view.superview!=parent){[view removeFromSuperview];[parent addSubview:view positioned:NSWindowAbove relativeTo:nil];}if(script){rect.origin.y+=MAX(0,rect.size.height-36);rect.size.height=36;}if(!parent.isFlipped)rect.origin.y=parent.bounds.size.height-NSMaxY(rect);view.frame=rect;view.hidden=NO;loader_extend_control_refresh(view);
- if(getenv("OPEN_SV2_UI_DIAGNOSTICS")&&!objc_getAssociatedObject(view,(const void*)layout)){objc_setAssociatedObject(view,(const void*)layout,@YES,OBJC_ASSOCIATION_RETAIN_NONATOMIC);NSPoint point=NSMakePoint(NSMidX(rect),NSMidY(rect));NSView *hit=[parent hitTest:[parent convertPoint:point toView:parent.superview]];fprintf(stderr,"EXTEND_UI parent=%s target=%s frame=%s\n",NSStringFromClass(parent.class).UTF8String,NSStringFromClass(hit.class).UTF8String,NSStringFromRect(rect).UTF8String);}
-
+static void layout(void *pane){
+ int index=paneIndex(pane);bool script=index<0;
+ int count=*(int*)((char*)pane+0x54);
+ void **children=*(void***)((char*)pane+0x48);
+ if(count<0||count>128)return;
+ for(int i=0;i<count;i++){
+  void *child=children[i];if(loader_native_panel_owns(pane,child))continue;
+  if(!script){if(*(uint16_t*)((char*)child+0xe8)&2)
+   ((void(*)(void*,bool))(*(void***)child)[0x60/8])(child,false);}
+  else {
+   int x=*(int*)((char*)child+0x38),y=*(int*)((char*)child+0x3c);
+   int w=*(int*)((char*)child+0x40),h=*(int*)((char*)child+0x44);
+   int bottom=*(int*)((char*)pane+0x44)-38;
+   if(y+h>bottom)
+    ((void(*)(void*,int,int,int,int))(slide+0x1007ff7dcULL))
+      (child,x,y,w,MAX(0,bottom-y));
+  }
+ }
+ NSString *identifier=index>0?@(categories[index].identifier):nil;
+ loader_native_panel_capture(pane,identifier,script,slide);
 }
-static void capture(void *pane){int index=paneIndex(pane);
- // Hide this category's built-in ScriptPanel children. The original Scripts
- // category keeps its own pane and remains untouched.
- int count=*(int*)((char*)pane+0x54);void **children=*(void***)((char*)pane+0x48);if(count<0||count>128)return;
- if(index>=0)for(int i=0;i<count;i++){void *child=children[i];auto table=*(void***)child;((void(*)(void*,bool))table[0x60/8])(child,false);}
- if(!panes)panes=[NSMutableDictionary dictionary];NSValue *key=[NSValue valueWithPointer:pane];if(!panes[key]){panes[key]=index<0?loader_extend_scripts_view():index==0?loader_extend_control_view():loader_extend_plugin_view(@(categories[index].identifier));fprintf(stderr,"EXTEND_CATEGORY pane-created pid=%d\n",getpid());}
- ensureTimer();layout(pane);
+static void capture(void *pane){
+ if(!panes)panes=[NSMutableSet set];
+ [panes addObject:[NSValue valueWithPointer:pane]];ensureTimer();layout(pane);
 }
 static void paint(void *pane,void *graphics){((void(*)(void*,void*))(slide+0x10101b198ULL))(pane,graphics);capture(pane);}
 static void resized(void *pane){((void(*)(void*))(slide+0x1010352a8ULL))(pane);capture(pane);}
@@ -97,13 +101,13 @@ static void syncCategories(){NSDictionary *snapshot=loader_plugin_ui_call(@"ui.s
  for(unsigned i=1;i<33;i++)categories[i].present=false;
  for(NSDictionary *plugin in snapshot[@"plugins"]){Category *category=nullptr;NSString *identifier=plugin[@"id"];for(unsigned i=1;i<33;i++)if(!strcmp(categories[i].identifier,identifier.UTF8String)){category=&categories[i];break;}
  if(!category){for(unsigned i=1;i<33;i++)if(!categories[i].identifier[0]){category=&categories[i];break;}}
- if(!category){for(unsigned i=1;i<33;i++)if(![identifiers containsObject:@(categories[i].identifier)]){category=&categories[i];closeCategory(category);for(NSValue *key in panes.allKeys)if(paneIndex(key.pointerValue)==(int)i)remove(key.pointerValue);break;}}
+ if(!category){for(unsigned i=1;i<33;i++)if(![identifiers containsObject:@(categories[i].identifier)]){category=&categories[i];closeCategory(category);for(NSValue *key in panes.allObjects)if(paneIndex(key.pointerValue)==(int)i)remove(key.pointerValue);break;}}
  if(!category)continue;strlcpy(category->identifier,identifier.UTF8String,sizeof category->identifier);strlcpy(category->label,[plugin[@"name"] UTF8String],sizeof category->label);category->present=true;category->visible=[plugin[@"visible"] boolValue];
  }
  for(unsigned i=1;i<33;i++)if(!categories[i].present||!categories[i].visible)closeCategory(&categories[i]);
  for(NSValue *key in bars.allObjects)barLayout(key.pointerValue);
 }
-static void ensureTimer(){if(timer)return;timer=[NSTimer timerWithTimeInterval:.25 repeats:YES block:^(NSTimer*){syncCategories();for(NSValue *key in panes.allKeys)layout(key.pointerValue);}];[NSRunLoop.mainRunLoop addTimer:timer forMode:NSRunLoopCommonModes];}
+static void ensureTimer(){if(timer)return;timer=[NSTimer timerWithTimeInterval:.25 repeats:YES block:^(NSTimer*){syncCategories();for(NSValue *key in panes.allObjects)layout(key.pointerValue);}];[NSRunLoop.mainRunLoop addTimer:timer forMode:NSRunLoopCommonModes];}
 struct SlotChange {unsigned offset;void *replacement;uintptr_t expected;};
 static bool changeSlots(uintptr_t address,const SlotChange *changes,size_t number){
  void **slots=(void**)(slide+address);for(size_t i=0;i<number;i++)if(slots[changes[i].offset/8]!=(void*)(slide+changes[i].expected))return false;
