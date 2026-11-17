@@ -17,6 +17,9 @@ static bool connected(int family,SOCKET &listener,SOCKET &client,SOCKET &server)
 }
 int wmain(int argc,wchar_t **argv){
  if(argc==2&&std::wstring(argv[1])==L"--child"){Sleep(300);return 0;}
+ assert(!tcp_active(MIB_TCP_STATE_LISTEN)&&!tcp_active(MIB_TCP_STATE_TIME_WAIT)&&tcp_active(MIB_TCP_STATE_ESTAB));
+ assert(loopback4(htonl(0x7f010203))&&!loopback4(htonl(0x0a000001)));unsigned char mapped[16]={0,0,0,0,0,0,0,0,0,0,0xff,0xff,127,0,0,1};assert(loopback6(mapped));mapped[12]=10;assert(!loopback6(mapped));
+ std::vector<unsigned char> malformed(4);*reinterpret_cast<DWORD*>(malformed.data())=1;assert(!valid_table<MIB_TCPTABLE_OWNER_PID>(malformed));
  WSADATA wsa{};assert(WSAStartup(MAKEWORD(2,2),&wsa)==0);
  HANDLE jobHandle=CreateJobObjectW(nullptr,nullptr);assert(jobHandle&&AssignProcessToJobObject(jobHandle,GetCurrentProcess()));
  auto handleText=std::to_wstring(reinterpret_cast<uintptr_t>(jobHandle));assert(SetEnvironmentVariableW(L"OPEN_SV2_HOST_JOB_HANDLE",handleText.c_str()));
