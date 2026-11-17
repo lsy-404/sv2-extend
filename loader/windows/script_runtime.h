@@ -11,7 +11,7 @@
 
 namespace script_runtime {
 using json=nlohmann::json;
-struct Ticket { ULONGLONG deadline; json response; bool done=false; };
+struct Ticket { ULONGLONG deadline; std::mutex mutex; json response; bool done=false; };
 class Service {
  const loader_api_v1 *api; DWORD thread; uint64_t next=1;
  std::map<uint64_t,std::shared_ptr<Ticket>> tickets;
@@ -24,6 +24,7 @@ class Service {
   {std::lock_guard<std::mutex> guard(lock());auto it=pending().find(reinterpret_cast<uintptr_t>(context));if(it==pending().end())return;ticket=it->second.lock();pending().erase(it);}
   if(!ticket)return;
   auto value=body&&length<=1048576?json::parse(body,body+length,nullptr,false):json();
+  std::lock_guard<std::mutex> guard(ticket->mutex);
   ticket->response=value.is_object()&&value.contains("ok")&&value["ok"].is_boolean()?value:failure("INVALID_NATIVE_RESPONSE");ticket->done=true;
  }
  void expire(){auto now=GetTickCount64();for(auto it=tickets.begin();it!=tickets.end();)if(now>=it->second->deadline)it=tickets.erase(it);else ++it;
@@ -49,8 +50,9 @@ public:
   if(method=="call.result"){
    if(!args.contains("ticket")||!args["ticket"].is_number_unsigned())return failure("INVALID_ARGUMENT");
    auto it=tickets.find(args["ticket"].get<uint64_t>());if(it==tickets.end())return failure("CALL_TICKET_EXPIRED");
-   if(!it->second->done)return success({{"pending",true}});
-   auto response=it->second->response;tickets.erase(it);return success({{"pending",false},{"response",response}});
+   auto ticket=it->second;json response;
+   {std::lock_guard<std::mutex> guard(ticket->mutex);if(!ticket->done)return success({{"pending",true}});response=ticket->response;}
+   tickets.erase(it);return success({{"pending",false},{"response",response}});
   }
   return failure("UNSUPPORTED_HOST_CAPABILITY");
  }
