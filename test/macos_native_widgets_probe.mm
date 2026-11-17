@@ -14,7 +14,7 @@ void run(){
  using namespace native_widgets;native_widgets::Component parent,content;Viewport viewport;Button button,toggle;Label label;Choice choice;TextEditor editor;int clicks=0;
  bool ok=parent.create()&&content.create()&&viewport.create(parent.object)&&button.create(content.object,"Probe",false,[&]{clicks++;})&&toggle.create(content.object,"Toggle",true,[]{})&&label.create(content.object,"Text")&&choice.create(content.object)&&editor.create(content.object,"文本 ü");
  if(!ok){emit(false);return;}toggle.set(true);choice.item("One",1);choice.item("Two",2);choice.set(1);ok=ok&&choice.get()==1; ((void(*)(int,void*))(slide+0x100856428ULL))(2,choice.object);ok=ok&&choice.get()==2;viewport.content(content.object);bounds(parent.object,0,0,240,300);bounds(viewport.object,0,0,240,300);bounds(content.object,0,0,240,600);bounds(toggle.object,10,10,180,25);visible(viewport.object,true);visible(toggle.object,true);
- ok=toggle.get()&&choice.get()==2&&editor.get()=="文本 ü"&&*(void**)((char*)content.object+0x30)==(char*)viewport.object+0x110&&*(void**)((char*)toggle.object+0x30)==content.object;
+ ok=ok&&toggle.get()&&choice.get()==2&&editor.get()=="文本 ü"&&*(void**)((char*)content.object+0x30)==(char*)viewport.object+0x110&&*(void**)((char*)toggle.object+0x30)==content.object;
  ((void(*)(void*,void*))(*(void***)button.object)[0x1b0/8])(button.object,nullptr);ok=ok&&clicks==1;
  editor.destroy();choice.destroy();label.destroy();toggle.destroy();button.destroy();viewport.destroy();ok=ok&&*(void**)((char*)content.object+0x30)==nullptr;content.destroy();parent.destroy();emit(ok);
 }

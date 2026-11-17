@@ -1,5 +1,4 @@
-// Guarded SV2 2.3.0 arm64 native category. Only managed host copies are accepted.
-// Uses registry objects and data-vtable slots; no executable code is rewritten.
+// Guard native bindings to the supported host profile.
 #import <AppKit/AppKit.h>
 #import <objc/runtime.h>
 #include <mach-o/dyld.h>
@@ -20,8 +19,7 @@ extern "C" const char *loader_host_data_directory(void);
 #if defined(__arm64__)
 namespace {
 static intptr_t slide;
-// Stable native category handles. Late plugin registrations bind an unused
-// handle; dormant handles are hidden and consume no toolbar space.
+// Hide dormant handles to avoid occupying toolbar space.
 struct Category {void *registry[8],*descriptorTable[28];void **object;char identifier[97],label[513];bool present,visible;uint64_t renderedGeneration;};
 static Category categories[33];
 static NSMutableSet<NSValue*> *panes;
@@ -41,7 +39,6 @@ static int position(void *self){auto c=fromSelf(self);return 1000+(c?(int)(c-cat
 static void noDestroy(void*){}
 static void *getRegistry(void *model){int index=modelIndex(model);return index<0?nullptr:&categories[index].object;}
 static void *descriptor(void *self){auto c=fromSelf(self);if(!c)return nullptr;void *p=((void*(*)(size_t))(slide+0x101197690ULL))(0x50);((void(*)(void*,int))(slide+0x100ecfee0ULL))(p,1);*(void**)p=(void*)(slide+0x1015be1a8ULL);((void(*)(void*,int,int))(slide+0x100ed3320ULL))(p,0xf0,1);*(void**)p=c->descriptorTable+2;return p;}
-// Padded 18px monochrome glyphs in the host 24px toolbar cell.
 static const char rootSVG[]="<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"24\" height=\"24\" viewBox=\"0 0 24 24\"><rect width=\"24\" height=\"24\" fill=\"#000000\" opacity=\"0\"/><g transform=\"translate(3 3) scale(.75)\" fill=\"none\" stroke=\"#000000\" stroke-width=\"1.5\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><rect x=\"3\" y=\"3\" width=\"6\" height=\"6\" rx=\"1\"/><rect x=\"3\" y=\"15\" width=\"6\" height=\"6\" rx=\"1\"/><rect x=\"15\" y=\"15\" width=\"6\" height=\"6\" rx=\"1\"/><path d=\"M14 6h8M18 2v8\"/></g></svg>";
 static const char pluginSVG[]="<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"24\" height=\"24\" viewBox=\"0 0 24 24\"><rect width=\"24\" height=\"24\" fill=\"#000000\" opacity=\"0\"/><g transform=\"translate(3 3) scale(.75)\" fill=\"none\" stroke=\"#000000\" stroke-width=\"1.5\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><path d=\"M4 4h6V3a2 2 0 0 1 4 0v1h6v6h1a2 2 0 0 1 0 4h-1v6h-6v-1a2 2 0 0 0-4 0v1H4v-6h1a2 2 0 0 0 0-4H4z\"/></g></svg>";
 static const char javascriptSVG[]="<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"24\" height=\"24\" viewBox=\"0 0 24 24\"><rect width=\"24\" height=\"24\" fill=\"#000000\" opacity=\"0\"/><g transform=\"translate(3 3) scale(.75)\"><rect x=\"2\" y=\"2\" width=\"20\" height=\"20\" rx=\"1\" fill=\"none\" stroke=\"#000000\" stroke-width=\"1.4\"/><path d=\"M11 9v7c0 3-4 3-5 1m13-7c-3-2-6 1-3 3l2 1c4 3-1 6-4 3\" fill=\"none\" stroke=\"#000000\" stroke-width=\"1.7\" stroke-linecap=\"round\"/></g></svg>";
@@ -54,8 +51,8 @@ static void remove(void *pane){
 }
 static void layout(void *pane){
  int index=paneIndex(pane);bool script=index<0;
- int count=*(int*)((char*)pane+0x54);
- void **children=*(void***)((char*)pane+0x48);
+ int count=*(int*)((char*)pane+0x64);
+ void **children=*(void***)((char*)pane+0x58);
  if(count<0||count>128)return;
  for(int i=0;i<count;i++){
   void *child=children[i];if(loader_native_panel_owns(pane,child))continue;
@@ -64,7 +61,8 @@ static void layout(void *pane){
   else {
    int x=*(int*)((char*)child+0x38),y=*(int*)((char*)child+0x3c);
    int w=*(int*)((char*)child+0x40),h=*(int*)((char*)child+0x44);
-   int bottom=*(int*)((char*)pane+0x44)-38;
+   int paneHeight=*(int*)((char*)pane+0x44);
+   int bottom=paneHeight-MIN(38,MAX(0,paneHeight-44));
    if(y+h>bottom)
     ((void(*)(void*,int,int,int,int))(slide+0x1007ff7dcULL))
       (child,x,y,w,MAX(0,bottom-y));
@@ -117,9 +115,7 @@ static bool changeSlots(uintptr_t address,const SlotChange *changes,size_t numbe
  if(mach_vm_protect(mach_task_self(),page,vm_page_size,FALSE,info.protection)!=KERN_SUCCESS){for(size_t i=0;i<number;i++)slots[changes[i].offset/8]=(void*)(slide+changes[i].expected);return false;}return true;
 }
 static bool setSlots(){SlotChange pane[]={{0,(void*)destroy,0x101035270ULL},{8,(void*)deletingDestroy,0x10103527cULL},{0xf8,(void*)paint,0x10101b198ULL},{0x140,(void*)resized,0x1010352a8ULL}};SlotChange bar[]={{0,(void*)barDestroy,0x101020e60ULL},{8,(void*)barDeletingDestroy,0x101020f4cULL},{0xf8,(void*)barPaint,0x1010206fcULL},{0x140,(void*)barLayout,0x101020c84ULL}};return changeSlots(0x1015bf430ULL,pane,4)&&changeSlots(0x1015bdd50ULL,bar,4);}
-// Native model persistence has a fixed type table. Our transient pane models
-// are recreated from plugin registrations, so omit only our own saved nodes on
-// the next launch. Preserve the full previous settings file before normalization.
+// Native persistence cannot deserialize transient panel models.
 static bool retireTransientLayout(){
  const char *directory=loader_host_data_directory();if(!directory)return true;NSString *file=[@(directory) stringByAppendingPathComponent:@"settings/settings.xml"];NSData *before=[NSData dataWithContentsOfFile:file];if(!before||![before length])return true;if(before.length>4*1024*1024)return false;
  NSString *text=[[NSString alloc]initWithData:before encoding:NSUTF8StringEncoding];if(![text containsString:@"OpenSV2ExtendPanel"])return true;
@@ -135,7 +131,6 @@ static bool profile(){
  const mach_header_64 *h=nullptr;unsigned image=0;for(unsigned i=0;i<_dyld_image_count();i++){auto candidate=(const mach_header_64*)_dyld_get_image_header(i);if(candidate->filetype==MH_EXECUTE){h=candidate;image=i;break;}}if(!h)return false;
  const uint8_t uuid[]={0xac,0xfe,0xfc,0x17,0x25,0xc2,0x34,0xd5,0xb2,0x8a,0xe8,0xbf,0x6f,0xfb,0x32,0xb4};bool match=false;auto command=(const load_command*)(h+1);for(unsigned i=0;i<h->ncmds;i++){if(command->cmd==LC_UUID)match=!memcmp(((const uuid_command*)command)->uuid,uuid,16);command=(const load_command*)((char*)command+command->cmdsize);}if(!match)return false;slide=_dyld_get_image_vmaddr_slide(image);
  struct Check{uintptr_t address;size_t length;const char *hash;};
- // Generated from the supported official executable; a changed build fails closed.
  static const Check checks[]={
  {0x10080a154ULL,384,"347b3531f2ca5d7ff957eaf6e1067a6f99966c28841a3b7a216f0914a17c90c5"},
  {0x1007ff7dcULL,652,"3c4b76937a224d2991e8b15dd1f421c6bb89829162131f131328e0480b83f7bf"},
@@ -176,8 +171,7 @@ extern "C" int loader_category_test_retire_layout(void){return retireTransientLa
 #endif
 extern "C" int loader_category_prepare(void){if(!profile()||!loader_host_data_directory()||!retireTransientLayout())return -1;
  for(unsigned i=0;i<33;i++){auto &c=categories[i];snprintf(c.label,sizeof c.label,i?"ExtendPluginSlot%u":"Extend",i);c.present=c.visible=i==0;memcpy(c.registry,(void*)(slide+0x1015bf668ULL),sizeof c.registry);c.registry[2]=(void*)noDestroy;c.registry[3]=(void*)noDestroy;c.registry[4]=(void*)name;c.registry[5]=(void*)icon;c.registry[6]=(void*)position;c.registry[7]=(void*)descriptor;c.object=c.registry+2;memcpy(c.descriptorTable,(void*)(slide+0x1015c09d8ULL),sizeof c.descriptorTable);c.descriptorTable[2+0xa8/8]=(void*)typeName;c.descriptorTable[2+0xc0/8]=(void*)getRegistry;}
- // Toolbar drawables are created before runtime registration. Reserve stable
- // built-in slots so each starts with its own semantic icon, even when disabled.
+ // Reserve built-in slots before toolbar drawables are created.
  strlcpy(categories[1].identifier,"opensv2.javascript-extend",sizeof categories[1].identifier);
  strlcpy(categories[2].identifier,"opensv2.lua-extend",sizeof categories[2].identifier);
  strlcpy(categories[3].identifier,"opensv2.mcp",sizeof categories[3].identifier);

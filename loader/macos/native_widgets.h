@@ -5,7 +5,7 @@
 #include <string>
 #include <unordered_map>
 
-namespace native_widgets {
+namespace native_widgets { namespace {
 static intptr_t slide;
 inline void initialize(intptr_t value){slide=value;}
 struct String {
@@ -67,4 +67,4 @@ struct TextEditor {
  void *component()const{return (char*)object+8;}
  void destroy(){if(object){((void(*)(void*))(slide+0x100868248ULL))(object);release(object);object=nullptr;}}
 };
-}
+} }
