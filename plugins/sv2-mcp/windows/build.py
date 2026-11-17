@@ -9,6 +9,5 @@ run('-municode',here/'stdio_bridge.cpp','-o',out/'Sv2Mcp.exe','-ladvapi32')
 (plugin.parents[2]/'plugin.json').write_text(json.dumps({'schema':1,'id':'sv2.mcp','name':'MCP','version':'0.3.0','nativeLibraries':{'windows-x86_64':'native/windows-x86_64/plugin.dll'}},indent=2),encoding='utf-8')
 if args.tests:
  host=out/'network-host';host.mkdir(exist_ok=True)
- run('-municode',repo/'test/windows_pipe_inherit_launcher.cpp','-o',out/'InheritLauncher.exe','-luserenv','-ladvapi32','-lshell32','-lole32','-luuid')
  run('-municode',repo/'test/windows_mcp_fixture.cpp','-o',host/'McpFixture.exe','-lshell32','-lole32','-luuid','-luser32')
  (host/'McpPlugin.dll').write_bytes(plugin.read_bytes())

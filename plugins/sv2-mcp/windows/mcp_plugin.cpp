@@ -10,6 +10,7 @@
 namespace {
 const loader_api_v1* loader=nullptr;
 HANDLE server=nullptr;
+std::wstring server_name;
 std::atomic<bool> server_running{false};
 HWND panel_dispatcher=nullptr;
 HWND startup_dispatcher=nullptr;
@@ -54,12 +55,18 @@ ClientCheck user_matches(HANDLE pipe){
  CloseHandle(self);return same?ClientCheck::accepted:ClientCheck::denied;
 }
 bool write_all(HANDLE pipe,const std::string& value){size_t offset=0;while(offset<value.size()){DWORD written=0;if(!WriteFile(pipe,value.data()+offset,DWORD(value.size()-offset),&written,nullptr)||!written)return false;offset+=written;}return true;}
+bool create_server(){
+ HANDLE token=nullptr;if(!OpenProcessToken(GetCurrentProcess(),TOKEN_QUERY,&token))return false;DWORD length=0;GetTokenInformation(token,TokenUser,nullptr,0,&length);std::vector<unsigned char> data(length);bool ok=length&&GetTokenInformation(token,TokenUser,data.data(),length,&length);CloseHandle(token);if(!ok)return false;
+ LPWSTR user=nullptr;if(!ConvertSidToStringSidW(reinterpret_cast<TOKEN_USER*>(data.data())->User.Sid,&user))return false;std::wstring acl=L"D:P(A;;GA;;;"+std::wstring(user)+L")(A;;GA;;;SY)";LocalFree(user);PSECURITY_DESCRIPTOR descriptor=nullptr;if(!ConvertStringSecurityDescriptorToSecurityDescriptorW(acl.c_str(),SDDL_REVISION_1,&descriptor,nullptr))return false;
+ SECURITY_ATTRIBUTES security{sizeof security,descriptor,FALSE};server_name=L"\\\\.\\pipe\\SV2Extend.MCP."+std::to_wstring(GetCurrentProcessId())+L"."+std::to_wstring(GetTickCount64());server=CreateNamedPipeW(server_name.c_str(),PIPE_ACCESS_DUPLEX|FILE_FLAG_FIRST_PIPE_INSTANCE,PIPE_TYPE_BYTE|PIPE_READMODE_BYTE|PIPE_WAIT|PIPE_REJECT_REMOTE_CLIENTS,1,65536,65536,1000,&security);LocalFree(descriptor);return server!=INVALID_HANDLE_VALUE;
+}
 bool publish(const loader_api_v1* api){
- wchar_t root[32768],name[512];DWORD rn=GetEnvironmentVariableW(L"OPEN_SV2_LOADER_DATA_DIR",root,32768),nn=GetEnvironmentVariableW(L"OPEN_SV2_MCP_PIPE_NAME",name,512);if(!rn||rn>=32768||!nn||nn>=512)return false;
+ wchar_t root[32768];DWORD rn=GetEnvironmentVariableW(L"OPEN_SV2_LOADER_DATA_DIR",root,32768);if(!rn||rn>=32768||server_name.empty())return false;auto name=server_name.c_str();
  std::wstring wide(name);if(wide.rfind(L"\\\\.\\pipe\\SV2Extend.MCP.",0)!=0)return false;int bytes=WideCharToMultiByte(CP_UTF8,WC_ERR_INVALID_CHARS,name,-1,nullptr,0,nullptr,nullptr);if(bytes<2)return false;std::string encoded(bytes,'\0');if(!WideCharToMultiByte(CP_UTF8,WC_ERR_INVALID_CHARS,name,-1,encoded.data(),bytes,nullptr,nullptr))return false;encoded.pop_back();
+ FILETIME created{},exited{},kernel{},userTime{};if(!GetProcessTimes(GetCurrentProcess(),&created,&exited,&kernel,&userTime))return false;uint64_t started=(uint64_t(created.dwHighDateTime)<<32)|created.dwLowDateTime;
  auto directory=std::filesystem::path(root)/L"outputs";std::error_code ec;std::filesystem::create_directories(directory,ec);if(ec)return false;auto target=directory/L"mcp-endpoint.json";auto temp=directory/(L".mcp-endpoint-"+std::to_wstring(GetCurrentProcessId())+L".tmp");
- windows_mcp::json value={{"schema",1},{"transport","named-pipe"},{"pipeName",encoded},{"hostPid",api->host_pid},{"protocolVersions",windows_mcp::json::array({"2025-11-25","2025-06-18","2025-03-26"})}};
- HANDLE token=nullptr;if(!OpenProcessToken(GetCurrentProcess(),TOKEN_QUERY,&token))return false;DWORD a=0,b=0;GetTokenInformation(token,TokenUser,nullptr,0,&a);GetTokenInformation(token,TokenAppContainerSid,nullptr,0,&b);std::vector<unsigned char> u(a),c(b);bool ok=a&&b&&GetTokenInformation(token,TokenUser,u.data(),a,&a)&&GetTokenInformation(token,TokenAppContainerSid,c.data(),b,&b);CloseHandle(token);if(!ok)return false;LPWSTR user=nullptr,app=nullptr;ok=ConvertSidToStringSidW(reinterpret_cast<TOKEN_USER*>(u.data())->User.Sid,&user)&&ConvertSidToStringSidW(reinterpret_cast<TOKEN_APPCONTAINER_INFORMATION*>(c.data())->TokenAppContainer,&app);if(!ok){if(user)LocalFree(user);if(app)LocalFree(app);return false;}std::wstring acl=L"D:P(A;;GA;;;"+std::wstring(user)+L")(A;;GA;;;"+std::wstring(app)+L")(A;;GA;;;SY)";LocalFree(user);LocalFree(app);PSECURITY_DESCRIPTOR sd=nullptr;if(!ConvertStringSecurityDescriptorToSecurityDescriptorW(acl.c_str(),SDDL_REVISION_1,&sd,nullptr))return false;SECURITY_ATTRIBUTES sa{sizeof sa,sd,FALSE};HANDLE file=CreateFileW(temp.c_str(),GENERIC_WRITE,0,&sa,CREATE_NEW,FILE_ATTRIBUTE_NORMAL,nullptr);LocalFree(sd);if(file==INVALID_HANDLE_VALUE)return false;auto content=value.dump();DWORD written=0;ok=WriteFile(file,content.data(),DWORD(content.size()),&written,nullptr)&&written==content.size()&&FlushFileBuffers(file);CloseHandle(file);if(!ok){DeleteFileW(temp.c_str());return false;}
+ windows_mcp::json value={{"schema",1},{"transport","named-pipe"},{"pipeName",encoded},{"hostPid",api->host_pid},{"hostStartTime",started},{"protocolVersions",windows_mcp::json::array({"2025-11-25","2025-06-18","2025-03-26"})}};
+ HANDLE token=nullptr;if(!OpenProcessToken(GetCurrentProcess(),TOKEN_QUERY,&token))return false;DWORD size=0;GetTokenInformation(token,TokenUser,nullptr,0,&size);std::vector<unsigned char> userData(size);bool ok=size&&GetTokenInformation(token,TokenUser,userData.data(),size,&size);CloseHandle(token);if(!ok)return false;LPWSTR user=nullptr;if(!ConvertSidToStringSidW(reinterpret_cast<TOKEN_USER*>(userData.data())->User.Sid,&user))return false;std::wstring acl=L"D:P(A;;GA;;;"+std::wstring(user)+L")(A;;GA;;;SY)";LocalFree(user);PSECURITY_DESCRIPTOR sd=nullptr;if(!ConvertStringSecurityDescriptorToSecurityDescriptorW(acl.c_str(),SDDL_REVISION_1,&sd,nullptr))return false;SECURITY_ATTRIBUTES sa{sizeof sa,sd,FALSE};HANDLE file=CreateFileW(temp.c_str(),GENERIC_WRITE,0,&sa,CREATE_NEW,FILE_ATTRIBUTE_NORMAL,nullptr);LocalFree(sd);if(file==INVALID_HANDLE_VALUE)return false;auto content=value.dump();DWORD written=0;ok=WriteFile(file,content.data(),DWORD(content.size()),&written,nullptr)&&written==content.size()&&FlushFileBuffers(file);CloseHandle(file);if(!ok){DeleteFileW(temp.c_str());return false;}
  return MoveFileExW(temp.c_str(),target.c_str(),MOVEFILE_REPLACE_EXISTING|MOVEFILE_WRITE_THROUGH)!=FALSE;
 }
 bool (*publish_endpoint)(const loader_api_v1*)=publish;
@@ -103,7 +110,6 @@ bool defer_start(){
 }
 extern "C" __declspec(dllexport) int loader_plugin_init_v1(const loader_api_v1* api){
  if(!api||api->abi_version!=LOADER_ABI_V1||!api->request_capability_json)return LOADER_ERR_INVALID;
- wchar_t value[64];DWORD n=GetEnvironmentVariableW(L"OPEN_SV2_MCP_PIPE_HANDLE",value,64);if(!n||n>=64)return LOADER_ERR_INVALID;wchar_t* end=nullptr;auto raw=_wcstoui64(value,&end,10);if(!raw||!end||*end)return LOADER_ERR_INVALID;
- HANDLE candidate=reinterpret_cast<HANDLE>(static_cast<uintptr_t>(raw));DWORD flags=0;if(GetFileType(candidate)!=FILE_TYPE_PIPE||!GetNamedPipeInfo(candidate,&flags,nullptr,nullptr,nullptr)||!(flags&PIPE_SERVER_END))return LOADER_ERR_INVALID;
- loader=api;server=candidate;remove_endpoint();if(!defer_start()){loader=nullptr;server=nullptr;return LOADER_ERR_INVALID;}install_panel();return LOADER_OK;
+ if(api->host_pid!=static_cast<int32_t>(GetCurrentProcessId())||!create_server())return LOADER_ERR_INVALID;
+ loader=api;remove_endpoint();if(!defer_start()){CloseHandle(server);server=nullptr;loader=nullptr;return LOADER_ERR_INVALID;}install_panel();return LOADER_OK;
 }
