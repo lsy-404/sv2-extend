@@ -17,7 +17,7 @@ hook_objects=[]
 for relative in ['buffer.c','hook.c','trampoline.c','hde/hde64.c']:
     obj=out/('minhook-'+Path(relative).stem+'.o');run('gcc','-O2','-c',source/'vendor/minhook/src'/relative,'-o',obj);hook_objects.append(obj)
 run('g++',*flags,'-shared',source/'core.cpp',source/'editor_gate.cpp',source/'editor_autostart.cpp',source/'javascript_gate.cpp',source/'voice_adapter.cpp',*hook_objects,'-o',out/'ExtendCore.dll','-luser32','-lgdi32','-ladvapi32','-lshell32','-lole32','-luuid','-lbcrypt','-Wl,--dynamicbase,--nxcompat')
-run('g++',*flags,'-municode',source/'launcher.cpp','-o',out/'ExtendLauncher.exe','-luserenv','-ladvapi32','-lshell32','-lole32','-loleaut32','-luuid','-Wl,--dynamicbase,--nxcompat')
+run('g++',*flags,'-municode',source/'launcher.cpp','-o',out/'ExtendLauncher.exe','-ladvapi32','-lshell32','-lole32','-loleaut32','-luuid','-Wl,--dynamicbase,--nxcompat')
 run('g++',*flags,'-municode',source/'fixture.cpp','-o',out/'ExtendFixture.exe','-luser32','-Wl,--dynamicbase,--nxcompat')
 (out/'namespace-host').mkdir(exist_ok=True)
 run('g++',*flags,'-municode',source.parents[1]/'test/windows_namespace_fixture.cpp','-o',out/'namespace-host/NamespaceFixture.exe','-lshell32','-lole32','-luuid','-luser32','-Wl,--dynamicbase,--nxcompat')
@@ -27,7 +27,7 @@ run('gcc','-shared','-O2','-Wall','-Wextra','-Werror','-I'+str(source.parents[1]
 files=['ExtendCore.dll','ExtendLauncher.exe','ExtendFixture.exe']
 imports={name:re.findall(r'DLL Name: (.+)',subprocess.check_output([args.prefix+'objdump','-p',str(out/name)],text=True)) for name in files}
 assert all(dll.lower() in {'kernel32.dll','user32.dll','gdi32.dll','shell32.dll','ole32.dll','oleaut32.dll','userenv.dll','msvcrt.dll','ucrtbase.dll','advapi32.dll','bcrypt.dll'} or dll.lower().startswith('api-ms-win-') for names in imports.values() for dll in names),imports
-report={'platform':'windows-x86_64','crossCompiled':os.name!='nt','runtimeVerified':False,'apcRelocationFree':True,'systemDLLsOnly':True,'imports':imports,'files':{name:hashlib.sha256((out/name).read_bytes()).hexdigest() for name in files},'scope':'Windows resident Core and sandboxed managed-host build. Runtime and installed SV2 verification are separate; editor availability comes from the live provider and whole-host network verification remains incomplete.'}
+report={'platform':'windows-x86_64','crossCompiled':os.name!='nt','runtimeVerified':False,'apcRelocationFree':True,'systemDLLsOnly':True,'imports':imports,'files':{name:hashlib.sha256((out/name).read_bytes()).hexdigest() for name in files},'scope':'Windows resident Core and managed-host build. Runtime and installed SV2 verification are separate; editor availability comes from the live provider and whole-host network verification remains incomplete.'}
 (out/'build-results.json').write_text(json.dumps(report,indent=2));print(json.dumps(report,indent=2))
 (out/'THIRD-PARTY-NOTICES.txt').write_text((source.parents[1]/'NOTICE').read_text(encoding='utf-8')+'\n'+(source/'vendor/minhook/LICENSE.txt').read_text(encoding='utf-8')+'\n'+(source/'vendor/JSON-LICENSE.MIT').read_text(encoding='utf-8'),encoding='utf-8')
 resources=out/'EditorLua';resources.mkdir(exist_ok=True)

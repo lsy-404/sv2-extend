@@ -19,11 +19,11 @@ for fatal in (False,True):
  marker=profile/'outputs/main.marker';launch_out=root/('fatal.out' if fatal else 'control.out');launch_err=root/('fatal.err' if fatal else 'control.err')
  with launch_out.open('w') as stdout,launch_err.open('w') as stderr:
   env=os.environ.copy();env['SV2_TEST_MAIN_MARKER']=str(marker)
-  result=subprocess.run([str(build/'ExtendLauncher.exe'),'--sandbox-fixture',str(hostdir/'FatalStartupHost.exe'),str(profile),str(marker)],stdout=stdout,stderr=stderr,timeout=30,env=env)
+  result=subprocess.run([str(build/'ExtendLauncher.exe'),'--managed-fixture',str(hostdir/'FatalStartupHost.exe'),str(profile),str(marker)],stdout=stdout,stderr=stderr,timeout=30,env=env)
  receipt_path=profile/'outputs/windows-runtime.json';deadline=time.monotonic()+5
  while not receipt_path.exists() and time.monotonic()<deadline: time.sleep(.05)
  if not receipt_path.exists(): raise AssertionError('missing runtime receipt; launcher exit '+str(result.returncode))
- receipt=json.loads(receipt_path.read_text());assert receipt['appContainer'] and receipt['managed'];entries=[x for x in receipt['packages'] if x.get('id')=='test.startup'];assert len(entries)==1 and entries[0]['loaded'] and entries[0]['initResult']==(-10 if fatal else 0)
+ receipt=json.loads(receipt_path.read_text());assert not receipt['appContainer'] and receipt['managed'];entries=[x for x in receipt['packages'] if x.get('id')=='test.startup'];assert len(entries)==1 and entries[0]['loaded'] and entries[0]['initResult']==(-10 if fatal else 0)
  if fatal:
   assert result.returncode != 0, 'fatal plugin did not abort startup'
   time.sleep(.25);assert marker.exists() and marker.read_text()=='armed', 'host main ran after fatal plugin failure'
@@ -38,4 +38,4 @@ for fatal in (False,True):
    try:
     assert kernel.WaitForSingleObject(wintypes.HANDLE(process),5000)==0, 'control host did not exit'
    finally: kernel.CloseHandle(wintypes.HANDLE(process))
- print(('fatal: plugin -10, host main not entered' if fatal else 'control: plugin 0, host main entered')+'; AppContainer receipt verified')
+ print(('fatal: plugin -10, host main not entered' if fatal else 'control: plugin 0, host main entered')+'; managed full-trust receipt verified')

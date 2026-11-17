@@ -29,7 +29,7 @@ for attempt in range(1, 4):
     result = subprocess.run([str(args.launcher), '--host', str(args.host), str(args.profile)],
                             capture_output=True, text=True, encoding='utf-8', timeout=90, check=True)
     launch = json.loads(result.stdout)
-    assert launch['residentCore'] and launch['appContainer'] and not launch['fixtureOnly']
+    assert launch['residentCore'] and not launch['appContainer'] and not launch['fixtureOnly']
     pid = launch['hostPid']
     process = kernel.OpenProcess(0x100001 | 0x1000, False, pid)
     assert process

@@ -37,13 +37,13 @@
 | 动态原生右侧面板 | 2.3.0 arm64 验证 | 官方 2.3.0 隔离宿主验证分类、停靠、缩放及状态刷新 |
 | MCP、Lua、JS 原生宿主接入 | SV2 验证 | 2.3.0 隔离宿主已验证 MCP、官方 Lua 与 JS 调用 |
 | 声库、pitch、导出后端 | SV2 验证 | 已验证音符组、pitch、声库选择及原生 WAV 混音 |
-| 托管数据目录重定向 | SV2 验证 | AppContainer 与主程序 Shell 路径重定向验证 |
+| 托管数据目录重定向 | SV2 验证 | 托管主程序 Shell 路径重定向验证 |
 | 显式 WebKit 上下文回收 | 本机验证；不等于完整隔离 | NOT_SUPPORTED |
 | 完整联网隔离 | 尚未验证完整覆盖 | 尚未实现 |
 
-Windows 支持 `--host <official-synthv-studio.exe> <profile-directory>`。启动器复制完整官方安装，迁移用户数据至独立 profile，原目录和已有数据目标保持原样；AppContainer 仅授予 SMBIOS 读取 capability，在 main 前加载 Core。直接导入和动态解析的 Roaming/Local Shell 查询都重定向至 profile。运行时与插件目录只读，host-data、outputs、preferences、storage 可写。同一 profile 的运行锁随宿主保持，重复启动被拒绝。官方目录的文件列表、大小或修改时间变化后，保留旧副本并更新受管程序。
+Windows 支持 `--host <official-synthv-studio.exe> <profile-directory>`。启动器复制完整官方安装，迁移用户数据至独立 profile，原目录和已有数据目标保持原样；受管宿主以当前用户权限运行，在 main 前加载 Core。直接导入和动态解析的 Roaming/Local Shell 查询都重定向至 profile。同一 profile 的运行锁随宿主保持，重复启动被拒绝。受管进程和子进程归属同一 Job，宿主可查询成员。官方目录的文件列表、大小或修改时间变化后，保留旧副本并更新受管程序。
 
-当前后端以离线模式运行，动态联网开发中。AppContainer 也限制对 profile 之外项目路径的访问。
+网络控制的覆盖范围以运行时状态为准；profile 路径重定向不限制对其他用户文件的访问。
 
 Windows MCP 服务驻留在 SV2 内。右侧工具栏接入宿主原生 Extend 分类及独立插件分类，面板内容由跟随宿主停靠区域的原生 SV 组件渲染；插件使用相同的声明式 UI API，不直接使用宿主控件。官方 2.3.0 隔离宿主已验证分类打开和关闭，以及实际屏幕缩放 100%→150%→100% 时的面板与字体尺寸；重复提交相同插件状态时焦点和滚动位置保持。客户端使用 `Native/Sv2Mcp.exe --endpoint Profile/outputs/mcp-endpoint.json` 建立 stdio 连接；该程序只转发 MCP，无常驻管理逻辑。内部官方 Lua 后端自动启动，用户无需运行脚本或使用 Lua 面板。入口有官方 2.3.0 的版本与字节校验，后端未就绪时不公布工具。
 
