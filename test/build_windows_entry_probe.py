@@ -23,6 +23,6 @@ generated=out/'entry_probe_core.cpp'
 generated.write_text(core,encoding='utf-8')
 objects=[args.build_dir.resolve()/('minhook-'+name+'.o') for name in ('buffer','hook','trampoline','hde64')]
 assert all(p.is_file() for p in objects)
-flags=['-std=c++17','-D_WIN32_WINNT=0x0602','-O2','-Wall','-Wextra','-Werror','-Wno-cast-function-type','-Wno-misleading-indentation','-static','-static-libgcc','-static-libstdc++','-I'+str(source),'-I'+str(test)]
-subprocess.run(['g++',*flags,'-shared',str(generated),str(source/'editor_gate.cpp'),str(source/'editor_autostart.cpp'),*map(str,objects),'-o',str(out/'ExtendCore.dll'),'-luser32','-lgdi32','-ladvapi32','-lshell32','-lole32','-luuid','-lbcrypt','-Wl,--dynamicbase,--nxcompat'],check=True)
+flags=['-std=c++17','-D_WIN32_WINNT=0x0602','-O2','-Wall','-Wextra','-Werror','-Wno-cast-function-type','-Wno-misleading-indentation','-static','-static-libgcc','-static-libstdc++','-I'+str(source),'-I'+str(test),'-I'+str(args.build_dir.resolve())]
+subprocess.run(['g++',*flags,'-shared',str(generated),str(source/'editor_gate.cpp'),str(source/'editor_autostart.cpp'),str(source/'javascript_gate.cpp'),str(source/'voice_adapter.cpp'),*map(str,objects),'-o',str(out/'ExtendCore.dll'),'-luser32','-lgdi32','-ladvapi32','-lshell32','-lole32','-loleaut32','-liphlpapi','-lws2_32','-luuid','-lbcrypt','-Wl,--dynamicbase,--nxcompat'],check=True)
 print('Built isolated entry probe Core')
