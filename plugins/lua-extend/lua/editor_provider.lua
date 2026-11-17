@@ -17,7 +17,7 @@ if voiceStatus and voiceStatus.probeAvailable and not voiceStatus.identityReadab
   end
 end
 local nativeVoice=voiceStatus and voiceStatus.identityReadable
-if nativeVoice then methods[#methods+1]='voicebanks.current' end
+if nativeVoice then methods[#methods+1]='voicebanks.current';methods[#methods+1]='voicebanks.project' end
 if voiceStatus and voiceStatus.catalogReadable then methods[#methods+1]='voicebanks.list' end
 if voiceStatus and voiceStatus.selectable then methods[#methods+1]='voicebanks.select' end
 local exportStatus=extend.request('export.native_status', {})
@@ -84,6 +84,37 @@ local function currentVoice(reference,group,track)
   end
   return {voicebank=identity,inherited=inherited,groupUUID=group:getUUID(),guard=json.encode({epoch,SV:getProject():getFileName(),group:getUUID(),raw.referenceKey,raw.identityKey,identity.identityKey,inherited})},raw
 end
+local function projectVoicebanks(project)
+  assert(nativeVoice,'VOICE_NATIVE_ADAPTER_UNAVAILABLE')
+  local voices,byIdentity={},{}
+  local firstUUID='';local referenceCount,assignedReferenceCount=0,0
+  for t=1,project:getNumTracks() do
+    local track=project:getTrack(t);local count=track:getNumGroups()
+    if count>0 then
+      local main=track:getGroupReference(1)
+      if t==1 then local target=main:getTarget();if target then firstUUID=target:getUUID() end end
+      local _,mainVoice=voiceSnapshot(main)
+      for g=1,count do
+        local raw=mainVoice
+        if g>1 then local _,voice=voiceSnapshot(track:getGroupReference(g));raw=voice end
+        assert(type(raw)=='table' and type(raw.assigned)=='boolean','VOICE_IDENTITY_INVALID')
+        local identity=raw.assigned and raw or mainVoice
+        referenceCount=referenceCount+1
+        if identity.assigned then
+          assignedReferenceCount=assignedReferenceCount+1
+          assert(type(identity.identityKey)=='string' and #identity.identityKey>0 and type(identity.name)=='string' and #identity.name>0,'VOICE_IDENTITY_INVALID')
+          local item=byIdentity[identity.identityKey]
+          if not item then
+            local voicebank={};for key,value in pairs(identity) do if key~='referenceKey' then voicebank[key]=value end end
+            item={voicebank=voicebank,referenceCount=0};byIdentity[identity.identityKey]=item;voices[#voices+1]=item
+          end
+          item.referenceCount=item.referenceCount+1
+        end
+      end
+    end
+  end
+  return {projectContext=json.encode({project:getFileName(),firstUUID}),referenceCount=referenceCount,assignedReferenceCount=assignedReferenceCount,voices=voices}
+end
 local function nativeResult(method,args)
   local value,why=extend.request(method,args)
   if not value then error(why or {code='VOICE_NATIVE_CALL_FAILED'}) end
@@ -103,6 +134,7 @@ local function invoke(method,args)
     return result
   end
   if method=='voicebanks.list' then return nativeResult('voice.catalog',{}) end
+  if method=='voicebanks.project' then return projectVoicebanks(SV:getProject()) end
   if method=='transport.status' then local transport=SV:getPlayback();return {status=transport:getStatus(),playhead=transport:getPlayhead()} end
   if method=='transport.play' then SV:getPlayback():play();return {status=SV:getPlayback():getStatus()} end
   if method=='transport.stop' then SV:getPlayback():stop();return {status=SV:getPlayback():getStatus()} end

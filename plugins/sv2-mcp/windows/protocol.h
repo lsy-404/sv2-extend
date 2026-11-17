@@ -20,6 +20,7 @@ inline const Builtin *builtins(size_t &count){static const Builtin definitions[]
  {"exports.cancel","sv_export_cancel","取消导出任务","Request cancellation of the current native export job; poll status to confirm."},
  {"selection.read","sv_read_editor","读取工程与选区","Read the current live editor selection, notes and edit guards."},
  {"voicebanks.current","sv_read_voicebank","读取当前声库","Read the host-selected voicebank identity through the native host adapter."},
+ {"voicebanks.project","sv_project_voicebanks","读取工程声库","List assigned voicebank identities used by the current project and their reference counts."},
  {"voicebanks.list","sv_list_voicebanks","读取声库列表","List voicebanks reported as available by the running editor, not the sales catalog."},
  {"voicebanks.select","sv_select_voicebank","切换声库","Select a voicebank using a fresh host selection guard; verify the resulting identity."},
  {"notes.set_pitch","sv_set_note_pitch","修改音符音高","Set MIDI note pitch through the live editor, with a fresh guard and one undo record."},

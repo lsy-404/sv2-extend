@@ -1,0 +1,19 @@
+voicebanks.project
+
+Returns the voicebanks used by the current project. Each distinct assigned
+identity appears once, with its group-reference count. An unassigned reference
+inherits its own track's main voicebank when that voicebank is assigned.
+Unassigned references with no assigned main voicebank are counted in
+referenceCount but not assignedReferenceCount or voices.
+
+Result: {projectContext, referenceCount, assignedReferenceCount, voices}
+Each voices item is {voicebank, referenceCount}; voicebank includes identityKey,
+name, language, languageOverride, backendType, version, assigned and source.
+projectContext is a JSON-encoded pair of project filename and first-track main
+UUID. It identifies the current context and is not a change guard.
+
+Lua: Extend.voicebanks.project(callback)
+JavaScript: Extend.voicebanks.project(callback)
+MCP: sv_project_voicebanks
+
+The method is advertised only when the native voice identity adapter is ready.

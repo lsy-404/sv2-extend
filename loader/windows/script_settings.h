@@ -8,7 +8,7 @@ struct Runtime {const loader_api_v1 *api;const char *id;const char *title;bool r
 inline json fields(bool lua){
  json result=json::array({{{"key","enabled"},{"title",lua?"启用 Lua Extend":"启用 JS Extend"},{"type","boolean"},{"default",true}}});
  const char *items[][4]={
-  {"voicebanks.current","读取当前声库","声库","voicebanks"},{"voicebanks.list","读取声库列表","声库","voicebanks"},{"voicebanks.select","切换声库","声库","voicebanks"},
+  {"voicebanks.current","读取当前声库","声库","voicebanks"},{"voicebanks.project","读取工程声库","声库","voicebanks"},{"voicebanks.list","读取声库列表","声库","voicebanks"},{"voicebanks.select","切换声库","声库","voicebanks"},
   {"exports.snapshot","读取导出状态","音频导出","exports"},{"exports.start","开始导出","音频导出","exports"},{"exports.status","查询导出任务","音频导出","exports"},{"exports.cancel","取消导出任务","音频导出","exports"},
   {"selection.read","读取工程与选区","工程与音高","editor"},{"notes.set_pitch","修改音符音高","工程与音高","editor"},{"pitch.read_range","读取音高曲线","工程与音高","editor"},{"pitch.replace_range","修改音高曲线","工程与音高","editor"},
   {"transport.status","读取播放状态","播放","editor"},{"transport.play","开始播放","播放","editor"},{"transport.stop","停止播放","播放","editor"},
