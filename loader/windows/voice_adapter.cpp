@@ -8,7 +8,7 @@ struct Arguments {void *self;const void *values;int count;};
 using Getter=void*(*)(void*,void*,const Arguments*);
 using Cast=void*(*)(void*,long,const void*,const void*,int);
 using ObjectGetter=void*(*)(void*);
-static Getter original;static DWORD thread;static unsigned char *image;static Observer observer;static void *owner,*observedReference;static ULONGLONG deadline;static unsigned count;
+static Getter original;static DWORD thread;static unsigned char *image;static Observer observer;static void *owner,*observedReference;static ULONGLONG deadline;static unsigned count;static bool in_callback,one_shot;
 static bool readable(const void *value,size_t length){
  auto address=reinterpret_cast<uintptr_t>(value);if(address<4096||address+length<address)return false;auto end=address+length;
  while(address<end){MEMORY_BASIC_INFORMATION page{};if(!VirtualQuery(reinterpret_cast<void*>(address),&page,sizeof page))return false;DWORD p=page.Protect&0xff;
@@ -19,7 +19,7 @@ static bool readable(const void *value,size_t length){
 template<class T>static bool read(const void *address,T &value){if(!readable(address,sizeof value))return false;memcpy(&value,address,sizeof value);return true;}
 static void *hook(void *closure,void *result,const Arguments *arguments){
  void *returned=original(closure,result,arguments);
- if(GetCurrentThreadId()!=thread||!observer||GetTickCount64()>deadline||!readable(arguments,sizeof *arguments)||arguments->count!=0||!arguments->self)return returned;
+ if(GetCurrentThreadId()!=thread||!observer||(one_shot&&count)||GetTickCount64()>deadline||!readable(arguments,sizeof *arguments)||arguments->count!=0||!arguments->self)return returned;
  try {
   void **table=nullptr;void *method=nullptr;if(!read(arguments->self,table)||!table||!read(table+7,method))return returned;
   MEMORY_BASIC_INFORMATION page{};if(!VirtualQuery(method,&page,sizeof page)||page.Type!=MEM_IMAGE||page.AllocationBase!=image||(page.Protect&0xff)!=PAGE_EXECUTE_READ)return returned;
@@ -28,8 +28,8 @@ static void *hook(void *closure,void *result,const Arguments *arguments){
   object=cast(object,0,image+0x17a54c8,image+0x179ae18,0);if(!object)return returned;
   object=reinterpret_cast<ObjectGetter>(image+0x9f7560)(object);if(!object)return returned;
   void *reference=cast(object,0,image+0x17916d0,image+0x17916a0,0);if(!reference)return returned;
-  ++count;if(count==1){observedReference=reference;observer(reference,owner);observedReference=nullptr;}
- }catch(...){observedReference=nullptr;count=2;}
+  ++count;if(count==1){observedReference=reference;in_callback=true;observer(reference,owner);in_callback=false;observedReference=nullptr;}
+ }catch(...){in_callback=false;observedReference=nullptr;count=2;}
  return returned;
 }
 int install(DWORD mainThread){
@@ -42,7 +42,8 @@ int install(DWORD mainThread){
  original=reinterpret_cast<Getter>(trampoline);thread=mainThread;image=base;
  if(MH_QueueEnableHook(base+offset)!=MH_OK||MH_ApplyQueued()!=MH_OK){MH_RemoveHook(base+offset);original=nullptr;return -1;}return 0;
 }
-bool begin(Observer callback,void *context){if(!original||!callback||GetCurrentThreadId()!=thread||(observer&&GetTickCount64()<=deadline))return false;observer=callback;owner=context;deadline=GetTickCount64()+500;count=0;return true;}
-bool finish(){if(GetCurrentThreadId()!=thread||!observer)return false;bool valid=count==1&&GetTickCount64()<=deadline;observer=nullptr;owner=nullptr;return valid;}
-bool is_observing(void *reference){return GetCurrentThreadId()==thread&&observer&&reference&&reference==observedReference&&GetTickCount64()<=deadline;}
+bool begin(Observer callback,void *context,bool once){if(!original||!callback||GetCurrentThreadId()!=thread||observer)return false;observer=callback;owner=context;deadline=GetTickCount64()+500;count=0;one_shot=once;return true;}
+bool finish(){if(GetCurrentThreadId()!=thread||!observer)return false;bool valid=count==1;observer=nullptr;owner=nullptr;return valid;}
+bool is_observing(void *reference){return GetCurrentThreadId()==thread&&observer&&reference&&in_callback&&reference==observedReference;}
+bool callback_active(){return GetCurrentThreadId()==thread&&in_callback;}
 }

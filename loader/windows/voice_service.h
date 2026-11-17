@@ -22,10 +22,10 @@ struct Service {
   bool restored=false;if(changed)try{invoke(previous,false);json after;restored=voice_identity::read(reference,after)&&after["identityKey"]==before["identityKey"];}catch(...){restored=false;}
   self.result=fail(restored?"VOICE_CHANGE_FAILED_ROLLED_BACK":"VOICE_CHANGE_ROLLBACK_FAILED");self.result["error"]["rolledBack"]=restored;self.result["error"]["undoRecordMayExist"]=true;
  }
- static void observe(void *reference,void *context){auto &self=*static_cast<Service*>(context);json value;if(!voice_identity::read(reference,value))return;if(self.selection.is_object())apply(reference,self,value);else self.captured=std::move(value);}
+ static void observe(void *reference,void *context){auto &self=*static_cast<Service*>(context);json value;if(voice_identity::read(reference,value)){if(self.selection.is_object())apply(reference,self,value);else self.captured=std::move(value);}self.deadline=GetTickCount64()+15000;}
  void clear(){token.clear();deadline=0;captured=json();selection=json();result=json();}
- void reset(){if(GetCurrentThreadId()!=thread)return;if(!token.empty())voice_adapter::finish();clear();validated=false;catalogValidated=false;}
- void tick(){if(GetCurrentThreadId()==thread&&!token.empty()&&GetTickCount64()>deadline){voice_adapter::finish();clear();}}
+ void reset(){if(GetCurrentThreadId()!=thread||voice_adapter::callback_active())return;if(!token.empty())voice_adapter::finish();clear();validated=false;catalogValidated=false;}
+ void tick(){if(GetCurrentThreadId()==thread&&!token.empty()&&!voice_adapter::callback_active()&&GetTickCount64()>deadline){voice_adapter::finish();clear();}}
  json call(const std::string &method,const json &args){
   if(GetCurrentThreadId()!=thread)return fail("MAIN_THREAD_REQUIRED");if(!args.is_object())return fail("INVALID_ARGUMENT");tick();
   if(method=="voice.native_status")return success({{"identityReadable",installed&&validated},{"probeAvailable",installed},{"catalogReadable",installed&&validated&&catalogValidated},{"selectable",installed&&validated&&catalogValidated}});
@@ -45,10 +45,11 @@ struct Service {
    if(!token.empty())return fail("VOICE_CAPTURE_BUSY");
    std::array<unsigned char,16> random{};if(BCryptGenRandom(nullptr,random.data(),static_cast<ULONG>(random.size()),BCRYPT_USE_SYSTEM_PREFERRED_RNG)<0)return fail("VOICE_CAPTURE_UNAVAILABLE");
    static constexpr char hex[]="0123456789abcdef";std::string next(32,'0');for(size_t i=0;i<random.size();++i){next[2*i]=hex[random[i]>>4];next[2*i+1]=hex[random[i]&15];}
-   if(!voice_adapter::begin(observe,this))return fail("VOICE_CAPTURE_BUSY");token=std::move(next);captured=json();result=json();selection=selecting?args:json();deadline=GetTickCount64()+500;return success({{"token",token}});
+   if(!voice_adapter::begin(observe,this,selecting))return fail("VOICE_CAPTURE_BUSY");token=std::move(next);captured=json();result=json();selection=selecting?args:json();deadline=GetTickCount64()+500;return success({{"token",token}});
   }
   bool selectionEnd=method=="voice.select.end";
   if(method=="voice.capture.end"||selectionEnd){
+   if(voice_adapter::callback_active())return fail("VOICE_CAPTURE_BUSY");
    if(args.size()!=1||!args.contains("token")||!args["token"].is_string()||args["token"]!=token||token.empty())return fail("VOICE_CAPTURE_TOKEN_MISMATCH");
    if(selectionEnd!=selection.is_object())return fail("VOICE_CAPTURE_MODE_MISMATCH");
    bool valid=voice_adapter::finish()&&(selectionEnd?result.is_object():captured.is_object());auto value=selectionEnd?std::move(result):success(std::move(captured));clear();
