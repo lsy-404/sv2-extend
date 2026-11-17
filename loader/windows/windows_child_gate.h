@@ -31,7 +31,10 @@ inline bool physical(const wchar_t *path,std::wstring &resolved){
 inline BOOL WINAPI on_create(LPCWSTR application,LPWSTR command,LPSECURITY_ATTRIBUTES processSecurity,LPSECURITY_ATTRIBUTES threadSecurity,BOOL inherit,DWORD flags,LPVOID environment,LPCWSTR directory,LPSTARTUPINFOW startup,LPPROCESS_INFORMATION process){
  std::lock_guard<std::recursive_mutex> lock(mutex);
  if(!current.blocked){BOOL result=original_create(application,command,processSecurity,threadSecurity,inherit,flags,environment,directory,startup,process);if(result)++current.generation;return result;}
- std::wstring resolved;if(!physical(application,resolved)||helpers.find(resolved)==helpers.end()){++current.denied;SetLastError(ERROR_ACCESS_DENIED);return FALSE;}
+ std::wstring resolved;bool valid=false;
+ if(application&&*application)valid=physical(application,resolved);
+ else if(command&&*command){int argc=0;LPWSTR *argv=CommandLineToArgvW(command,&argc);if(argv){if(argc>0)valid=physical(argv[0],resolved);LocalFree(argv);}}
+ if(!valid||helpers.find(resolved)==helpers.end()){++current.denied;SetLastError(ERROR_ACCESS_DENIED);return FALSE;}
  BOOL result=original_create(resolved.c_str(),command,processSecurity,threadSecurity,inherit,flags,environment,directory,startup,process);if(result)++current.generation;return result;
 }
 inline HINSTANCE WINAPI on_shell(HWND window,LPCWSTR operation,LPCWSTR file,LPCWSTR parameters,LPCWSTR directory,INT show){
