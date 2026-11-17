@@ -22,3 +22,4 @@
 - 最终 Mac 分支 1c1d9bed96af3de1f0e4c2b54ba5a75406c172f1 经 bundle verify 导入，本地 macOS worktree fast-forward，再本地合并到 main；没有创建 PR。新布局测试源已移到根 test，相关 runner 产物改为 test/.outputs。
 - 审核最终 diff：旧 AppKit 控件承载实现删除且没有遗留引用；新控件具有内部链接、Unicode 字符串读写、对象解绑与销毁、延迟事件实例守卫、草稿保留和自适应行高。必要检查已通过，没有重复扩大测试。
 - Windows 和 macOS 安装与已验证范围写入 CROSS-PLATFORM/IMPLEMENTATION-STATUS；Mac 屏幕录制末次预检仍 false，未修改系统权限。
+- 最终交付前再次确认 origin/main 没有新增远端提交且 protected=false；Mac 子分支在本地合并，差异与提交说明检查通过，主线已推送至 9d1f77d。实现、安装、可用验证与文档完成，权限限制的 Mac 视觉/物理输入检查单独保留。
