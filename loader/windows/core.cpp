@@ -32,6 +32,7 @@
 #include "windows_child_gate.h"
 #include "windows_host_navigation.h"
 #include "windows_webview_gate.h"
+#include "windows_webview_startup.h"
 #include "windows_web_retirement.h"
 #include "network_bootstrap.h"
 using json=nlohmann::json;namespace fs=std::filesystem;
@@ -44,7 +45,7 @@ std::unique_ptr<export_service::Service> native_export;
 std::unique_ptr<profile_lease::Service> profile_operations;
 std::unique_ptr<startup_policy::Service> startup_network;
 std::unique_ptr<windows_network::Controller> network_controller;
-windows_network::State bootstrap_network_state;bool network_initialization_attempted=false;
+windows_network::State bootstrap_network_state;bool network_initialization_attempted=false;windows_webview_startup::Proof early_web_proof;
 windows_web_retirement::Service web_retirement;bool web_retirement_polling=false;
 script_settings::Runtime lua_runtime{&api,"opensv2.lua-extend","Lua Extend",false},js_runtime{&api,"opensv2.javascript-extend","JS Extend",false};
 uint64_t capability_generation=1;
@@ -149,7 +150,8 @@ int network_state(loader_network_state_v1 *state){
  if(!managed)return LOADER_ERR_NOT_SUPPORTED;network_tick();auto policy=network_controller?network_controller->state():bootstrap_network_state;auto sockets=windows_socket_gate::state();auto children=windows_child_gate::state();auto web=windows_webview_gate::state();auto scope=network_scope::job();auto actual=network_scope::connections(GetCurrentProcessId());auto children_after=windows_child_gate::state();
  uint32_t connections=actual.tcp4_active+actual.tcp6_active+actual.udp4_active+actual.udp6_active;
  bool drained=sockets.installed&&sockets.blocked&&!sockets.pending&&!sockets.discovery_error&&!sockets.active&&!sockets.unknown&&!sockets.close_failed&&actual.complete&&!connections;
- bool child_scope=children.installed&&children.blocked&&scope.child_scope&&children.generation==children_after.generation&&editor_gate_result==LOADER_OK&&web.installed&&web.blocked&&web.factoryBound&&web.coverage&&!web.pendingEnvironment&&!web.pendingController&&!web.controllers;
+ bool early=early_web_proof.valid(policy.generation,policy.requested_blocked,policy.applied_blocked,policy.policy_applied,policy.pending,policy.error!=0,network_controller!=nullptr);
+ bool child_scope=children.installed&&children.blocked&&scope.child_scope&&children.generation==children_after.generation&&editor_gate_result==LOADER_OK&&windows_webview_gate::covered(web,early);
  uint64_t unverified=child_scope?0:LOADER_NET_WEBVIEW2|LOADER_NET_WEBRTC;
  if(!policy.policy_applied||!policy.applied_blocked||policy.pending||policy.error)unverified|=LOADER_NET_WINHTTP|LOADER_NET_WININET|LOADER_NET_WINSOCK;
  if(!drained)unverified|=LOADER_NET_WINSOCK;
@@ -242,6 +244,7 @@ void loader_category_after_root(){if(managed&&on_main()){if(!SetTimer(dispatcher
 void loader_category_cleanup_root(){if(managed&&on_main())native_category_registry::set_host(nullptr);}
 extern "C" __declspec(dllexport) int ExtendInitialize(void*){
  if(dispatcher)return main_thread==GetCurrentThreadId()?0:LOADER_ERR_INVALID;
+ windows_webview_startup::Proof::Scope early_scope(early_web_proof);
  app_container=token_is_app_container();managed=flag_enabled(L"OPEN_SV2_WINDOWS_MANAGED");if(managed&&app_container)return LOADER_ERR_NOT_SUPPORTED;if(!managed&&!flag_enabled(L"OPEN_SV2_WINDOWS_FIXTURE"))return LOADER_ERR_NOT_SUPPORTED;
  main_thread=GetCurrentThreadId();if(!read_path(L"OPEN_SV2_LOADER_DATA_DIR",root))return LOADER_ERR_STORAGE_NOT_CONFIGURED;if(!regular(root,true))return LOADER_ERR_INVALID;if(!plugin_storage::install(root))return LOADER_ERR_STORAGE_IO;
  if(managed){fs::path actual;if(!read_path(L"OPEN_SV2_HOST_DATA_DIR",actual)||CompareStringOrdinal(actual.c_str(),-1,(root/L"host-data").c_str(),-1,TRUE)!=CSTR_EQUAL||!regular(actual,true)||actual.native().size()+12>=MAX_PATH||!data_namespace::install(actual.wstring()))return LOADER_ERR_INVALID;host_directory=actual.u8string();}
@@ -256,7 +259,7 @@ extern "C" __declspec(dllexport) int ExtendInitialize(void*){
   windows_child_gate::navigation=windows_host_navigation::route;
   wchar_t handle[32]{};DWORD length=GetEnvironmentVariableW(L"OPEN_SV2_NETWORK_BOOTSTRAP_HANDLE",handle,32);wchar_t *end=nullptr;auto raw=length&&length<32?_wcstoui64(handle,&end,10):0;windows_network_bootstrap::Record receipt;
   bool observed=raw&&end&&!*end&&windows_network_bootstrap::read(reinterpret_cast<HANDLE>(uintptr_t(raw)),receipt);
-  if(observed){bootstrap_network_state.generation=receipt.generation;bootstrap_network_state.requested_blocked=receipt.requested!=0;bootstrap_network_state.applied_blocked=receipt.applied!=0;bootstrap_network_state.policy_applied=true;}
+  if(observed){early_web_proof.attest(receipt.generation,receipt.requested!=0,receipt.applied!=0,receipt.verified!=0);bootstrap_network_state.generation=receipt.generation;bootstrap_network_state.requested_blocked=receipt.requested!=0;bootstrap_network_state.applied_blocked=receipt.applied!=0;bootstrap_network_state.policy_applied=true;}
   if(startup.requested_blocked){if(!observed||!receipt.requested||!receipt.applied||!windows_socket_gate::setblocked(true))return LOADER_ERR_POLICY_INVALID;startup_network->mark_applied();}
   else{bootstrap_network_state.requested_blocked=false;windows_child_gate::setblocked(false);windows_webview_gate::setblocked(false);}
  }

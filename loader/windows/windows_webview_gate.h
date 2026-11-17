@@ -108,4 +108,8 @@ inline bool retire(){
  return coverage.load()&&pending_environment.load()==0&&pending_controller.load()==0;
 }
 inline State state(){std::lock_guard<std::mutex> lock(lifecycle_mutex);return {installed,blocked.load(),original_factory.load()!=nullptr,online_seen.load(),denied.load(),pending_environment.load(),pending_controller.load(),static_cast<unsigned>(controllers.size()),coverage.load()};}
+inline bool covered(const State &value,bool earlyProof){
+ if(!value.installed||!value.blocked||!value.coverage||value.pendingEnvironment||value.pendingController||value.controllers)return false;
+ return value.factoryBound||(earlyProof&&!value.onlineFactorySeen&&!value.denied);
+}
 }
