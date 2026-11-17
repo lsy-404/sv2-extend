@@ -1,0 +1,24 @@
+#include "../loader/windows/native_panel.h"
+#include <cassert>
+#include <thread>
+#include <iostream>
+using native_panel::json;
+static int owner=0,settings_events=0,action_events=0;static bool reenter=false;
+static void event(const char *raw,void *ctx){auto v=json::parse(raw);if(v["kind"]=="settings"){++settings_events;if(reenter)assert(native_panel::update_ui("test.plugin",R"({"status":"callback"})",ctx)==LOADER_OK);}else if(v["kind"]=="action"){++action_events;if(reenter)assert(native_panel::unregister_ui("test.plugin",ctx)==LOADER_OK);}}
+static json snap(){auto r=native_panel::call("ui.snapshot",json::object());assert(r["ok"]==true);return r["result"];}
+static json run(const char *method,json args){args["id"]="test.plugin";args["generation"]=snap()["generation"];return native_panel::call(method,args);}
+int main(){
+ wchar_t temp[MAX_PATH];assert(GetTempPathW(MAX_PATH,temp));auto root=std::filesystem::path(temp)/(L"sv2-ui-call-test-"+std::to_wstring(GetCurrentProcessId()));assert(!std::filesystem::exists(root));assert(std::filesystem::create_directory(root));assert(native_panel::install(GetDesktopWindow(),root.c_str())==LOADER_OK);
+ json d={{"id","test.plugin"},{"name","Test"},{"version","1"},{"status","ready"},{"sidebar",{{"title","Test"},{"rows",json::array({{{"type","button"},{"id","refresh"},{"text","Refresh"}}})}}},{"settings",json::array({{{"key","enabled"},{"title","Enabled"},{"type","boolean"},{"default",true}},{{"key","count"},{"title","Count"},{"type","integer"},{"minimum",0},{"maximum",5},{"default",1}}})}};
+ assert(native_panel::register_ui(d.dump().c_str(),event,&owner)==LOADER_OK);assert(settings_events==1);auto original=snap();
+ auto stale=native_panel::call("ui.set_visible",{{"id","test.plugin"},{"generation",0},{"visible",false}});assert(stale["error"]["code"]=="STALE_UI_GENERATION");
+ assert(run("ui.set_setting",{{"key","count"},{"value",4}})["ok"]==true);auto after=snap();assert(after["plugins"][0]["values"]["count"]==4);assert(native_panel::call("ui.set_visible",{{"id","test.plugin"},{"generation",original["generation"]},{"visible",false}})["error"]["code"]=="STALE_UI_GENERATION");
+ auto before=snap();assert(run("ui.set_settings",json::object())["error"]["code"]=="INVALID_ARGUMENT");assert(run("ui.set_settings",{{"settings",json::array()}})["error"]["code"]=="INVALID_ARGUMENT");assert(run("ui.set_settings",{{"settings",{{"enabled",false}}}})["error"]["code"]=="INVALID_SETTING_VALUE");assert(snap()==before);assert(run("ui.set_settings",{{"settings",{{"enabled",false},{"count",99}}}})["error"]["code"]=="INVALID_SETTING_VALUE");assert(snap()==before);assert(run("ui.set_setting",{{"key","count"},{"value",1.5}})["error"]["code"]=="INVALID_SETTING_VALUE");assert(snap()==before);
+ reenter=true;auto result=run("ui.set_settings",{{"settings",{{"enabled",false},{"count",2}}}});assert(result["ok"]==true&&result["result"]["plugins"][0]["status"]=="callback");assert(result["result"]["plugins"][0]["values"]["enabled"]==false);reenter=false;
+ assert(run("ui.set_visible",{{"visible",false}})["ok"]==true);assert(snap()["plugins"][0]["visible"]==false);assert(run("ui.action",{{"action","unknown"}})["error"]["code"]=="UI_ACTION_UNAVAILABLE");
+ json cross,cross_write;auto gen=snap()["generation"];std::thread worker([&]{cross=native_panel::call("ui.snapshot",json::object());cross_write=native_panel::call("ui.set_visible",{{"id","test.plugin"},{"generation",gen},{"visible",true}});});worker.join();assert(cross["error"]["code"]=="MAIN_THREAD_REQUIRED"&&cross_write["error"]["code"]=="MAIN_THREAD_REQUIRED"&&snap()["plugins"][0]["visible"]==false);
+ auto pref=root/L"preferences"/L"windows-plugin-ui.json";std::ifstream input(pref,std::ios::binary);auto persisted=json::parse(input);input.close();assert(persisted["plugins"]["test.plugin"]["enabled"]==false&&persisted["plugins"]["test.plugin"]["count"]==2&&persisted["categoryVisibility"]["test.plugin"]==false);
+ reenter=true;assert(run("ui.action",{{"action","refresh"}})["ok"]==true);assert(action_events==1&&snap()["plugins"].empty());reenter=false;
+ native_panel::preferences=json::object();native_panel::visibility=json::object();native_panel::preference_document=json::object();native_panel::preferences_writable=false;assert(native_panel::install(GetDesktopWindow(),root.c_str())==LOADER_OK);assert(native_panel::register_ui(d.dump().c_str(),event,&owner)==LOADER_OK);auto restored=snap();assert(restored["plugins"][0]["values"]["enabled"]==false&&restored["plugins"][0]["values"]["count"]==2&&restored["plugins"][0]["visible"]==false);assert(native_panel::unregister_ui("test.plugin",&owner)==LOADER_OK);
+ assert(DeleteFileW(pref.c_str()));assert(RemoveDirectoryW((root/L"preferences").c_str()));assert(RemoveDirectoryW(root.c_str()));std::cout<<"UI call contract passed\n";
+}
