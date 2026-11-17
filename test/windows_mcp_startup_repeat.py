@@ -78,11 +78,11 @@ for attempt in range(1, 4):
         client.stdin.flush()
         while True:
             tools = request('tools/list', {})['tools']
-            if any(tool['name'] == 'svext_read_editor' for tool in tools):
+            if any(tool['name'] == 'sv_read_editor' for tool in tools):
                 break
             assert time.monotonic() < deadline, 'Editor did not become ready'
             time.sleep(.1)
-        editor = request('tools/call', {'name': 'svext_read_editor', 'arguments': {}})['structuredContent']
+        editor = request('tools/call', {'name': 'sv_read_editor', 'arguments': {}})['structuredContent']
         assert editor['ok'] and editor['result']['noteCount'] == 0
         assert json.loads(editor['result']['guard'])[1] == '', 'Only an unsaved fixture may be stopped'
         if abort_file.exists():

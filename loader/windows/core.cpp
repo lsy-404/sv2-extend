@@ -23,12 +23,14 @@
 #include "javascript_bundle.h"
 #include "plugin_storage.h"
 #include "voice_service.h"
+#include "export_native_service.h"
 using json=nlohmann::json;namespace fs=std::filesystem;
 namespace {
 DWORD main_thread;HWND dispatcher;loader_api_v1 api{};std::string executable,host_directory;fs::path root;json package_results=json::array();bool managed=false,app_container=false;
 std::vector<HMODULE> modules;
 std::unique_ptr<script_runtime::Service> script_service;
 std::unique_ptr<voice_service::Service> native_voice;
+std::unique_ptr<export_service::Service> native_export;
 script_settings::Runtime lua_runtime{&api,"opensv2.lua-extend","Lua Extend",false},js_runtime{&api,"opensv2.javascript-extend","JS Extend",false};
 uint64_t capability_generation=1;
 std::unique_ptr<editor_lua::Service> editor_service;int editor_gate_result=LOADER_ERR_NOT_SUPPORTED,editor_start_result=LOADER_ERR_NOT_SUPPORTED;
@@ -81,6 +83,7 @@ json script_call(const std::string &method,const json &args,bool javascript){
  if(method=="runtime.info")return editor_lua::Service::success({{"pid",GetCurrentProcessId()},{"mainThread",true},{"apiVersion",1},{"transport","in-process-call"},{"usesEnvironmentState",false},{"usesFilesOrPipes",false},{"javascriptNativeAvailable",javascript_gate::ready()}});
  if(method=="runtime.capabilities")return editor_lua::Service::success(capability_snapshot());
  if(method.rfind("voice.",0)==0&&native_voice)return native_voice->call(method,args);
+ if(method.rfind("export.",0)==0&&native_export)return native_export->call(method,args);
  if(method.rfind("ui.",0)==0)return native_panel::call(method,args);
  if(method.rfind("call.",0)==0)return script_service?script_service->call(method,args):editor_lua::Service::fail("UNSUPPORTED_HOST_CAPABILITY");
  return editor_service?editor_service->call(method,args):editor_lua::Service::fail("UNSUPPORTED_HOST_CAPABILITY");
@@ -108,7 +111,7 @@ void namespace_receipt(){
  std::ofstream output(root/L"outputs"/L"windows-namespace.json",std::ios::binary|std::ios::trunc);if(!output)return;output<<json{{"mode","shell-entry-detours"},{"hostPid",GetCurrentProcessId()},{"redirectedQueries",data_namespace::redirected.load()},{"otherQueries",data_namespace::other.load()},{"lastOtherCSIDL",data_namespace::last_csidl.load()},{"lastOtherKnownId",data_namespace::last_known.load()}}.dump(2);output.close();if(output)previous=count;
 }
 void editor_receipt(){if(!managed)return;static unsigned attempts=0;static ULONGLONG attempted_at=0;auto now=GetTickCount64();auto state=editor_autostart::status();if(editor_start_result==LOADER_OK&&!state.scan_seen&&editor_autostart::root_ready()&&attempts<20&&now-attempted_at>=500){attempted_at=now;attempts++;editor_autostart::request_initial_scan();state=editor_autostart::status();}json value{{"hostPid",GetCurrentProcessId()},{"getenvGateResult",editor_gate_result},{"autostartResult",editor_start_result},{"installed",state.installed},{"scanSeen",state.scan_seen},{"runRequested",state.run_requested},{"scanAttempts",attempts},{"initialScanReason",state.initial_scan_reason},{"editorReady",editor_online()}};static std::string previous;auto body=value.dump(2);if(body==previous)return;std::ofstream output(root/L"outputs"/L"windows-editor.json",std::ios::binary|std::ios::trunc);if(!output)return;output<<body;output.close();if(output)previous=body;}
-LRESULT CALLBACK window_proc(HWND window,UINT message,WPARAM w,LPARAM l){if(message==WM_APP+2){native_panel::drain();return 0;}if(message==WM_APP+1){dispatch_request((Request*)l);return 0;}if(message==WM_TIMER){native_panel::drain();if(native_voice)native_voice->tick();if(editor_service)editor_service->tick();std::vector<Request*> expired;{std::lock_guard<std::mutex> guard(requests_mutex);for(auto &r:requests)if(!r->delivered&&GetTickCount64()>=r->deadline)expired.push_back(r.get());}for(auto r:expired)error(r,"TIMEOUT");category_tick();namespace_receipt();editor_receipt();return 0;}return DefWindowProcW(window,message,w,l);}
+LRESULT CALLBACK window_proc(HWND window,UINT message,WPARAM w,LPARAM l){if(message==WM_APP+2){native_panel::drain();return 0;}if(message==WM_APP+1){dispatch_request((Request*)l);return 0;}if(message==WM_TIMER){native_panel::drain();if(native_voice)native_voice->tick();if(native_export)native_export->tick();if(editor_service)editor_service->tick();std::vector<Request*> expired;{std::lock_guard<std::mutex> guard(requests_mutex);for(auto &r:requests)if(!r->delivered&&GetTickCount64()>=r->deadline)expired.push_back(r.get());}for(auto r:expired)error(r,"TIMEOUT");category_tick();namespace_receipt();editor_receipt();return 0;}return DefWindowProcW(window,message,w,l);}
 int network_state(loader_network_state_v1 *state){if(!state||state->abi_version!=1||state->struct_size<sizeof *state)return LOADER_ERR_INVALID;*state={1,sizeof *state,1,0,LOADER_NET_WINHTTP|LOADER_NET_WININET|LOADER_NET_WINSOCK|LOADER_NET_WEBVIEW2,0,0,0,0};return 0;}
 int verify(uint64_t generation,loader_network_state_v1 *state){int result=network_state(state);if(result)return result;return generation!=state->generation?LOADER_ERR_STALE_GENERATION:LOADER_ERR_NETWORK_UNVERIFIED;}
 int block(int){return LOADER_ERR_NOT_SUPPORTED;}int blocked(){return 0;}
@@ -158,6 +161,7 @@ bool flag_enabled(const wchar_t *key){wchar_t value[4]{};return GetEnvironmentVa
 bool read_path(const wchar_t *key,fs::path &out){wchar_t path[32768]{};DWORD n=GetEnvironmentVariableW(key,path,32768);if(!n||n>=32768)return false;fs::path parsed(path);if(!parsed.is_absolute()||!parsed.has_root_name())return false;out=parsed.lexically_normal();return out.native().size()<32768;}
 void startup_receipt(){std::error_code ec;auto directory=root/L"outputs";fs::create_directories(directory,ec);if(ec||!regular(directory,true)){log_message("runtime-receipt-directory-unavailable");return;}auto file=directory/L"windows-runtime.json";if(fs::exists(file,ec)&&!regular(file)){log_message("runtime-receipt-path-invalid");return;}std::ofstream stream(file,std::ios::binary|std::ios::trunc);if(!stream){log_message("runtime-receipt-write-failed");return;}stream<<json{{"hostPid",GetCurrentProcessId()},{"mainThreadId",main_thread},{"appContainer",app_container},{"managed",managed},{"hostDataNamespace",managed},{"pluginUi",true},{"packages",package_results}}.dump(2);stream.close();if(!stream)log_message("runtime-receipt-write-failed");}
 }
+void loader_export_set_root(void *root){export_native::set_root(root);}
 void loader_category_before_root(){if(managed&&on_main()){if(native_category_registry::prepare(reinterpret_cast<unsigned char*>(GetModuleHandleW(nullptr)),main_thread,category_update,category_remove,native_panel::owns_child))category_sync();else log_message("native-category-unavailable");}}
 void loader_category_after_root(){if(managed&&on_main())category_tick();}
 void loader_category_cleanup_root(){if(managed&&on_main())native_category_registry::set_host(nullptr);}
@@ -178,6 +182,7 @@ extern "C" __declspec(dllexport) int ExtendInitialize(void*){
  if(managed){editor_service=std::make_unique<editor_lua::Service>(&api);editor_gate_result=editor_gate::install(editor_service.get());if(editor_gate_result==LOADER_OK){auto entry=root/L"host-data"/L"Roaming"/L"Dreamtonics"/L"Synthesizer V Studio 2"/L"scripts"/L"opensv2-loader-runtime.lua";editor_start_result=editor_autostart::install(editor_service.get(),entry.c_str());}}
  native_panel::set_categories_changed(category_sync);native_panel::set_open_category(native_category_registry::open_category);
  script_service=std::make_unique<script_runtime::Service>(&api);editor_gate::set_router(script_call);
+ native_export=std::make_unique<export_service::Service>();native_export->available=managed&&editor_gate_result==LOADER_OK&&export_native::install(main_thread);
  native_voice=std::make_unique<voice_service::Service>(main_thread);if(managed)native_voice->installed=voice_adapter::install(main_thread)==0;
  lua_runtime.ready=editor_gate_result==LOADER_OK;if(managed)javascript_gate::install(editor_gate::call_json,loaderJavaScriptModule);js_runtime.ready=javascript_gate::ready();script_settings::register_runtime(lua_runtime,true);script_settings::register_runtime(js_runtime,false);
  load_packages();startup_receipt();log_message("windows-resident-ready");return 0;
