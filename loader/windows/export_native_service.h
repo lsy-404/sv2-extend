@@ -51,7 +51,7 @@ struct Service {
  }
  json perform(const std::string &kind,const json &args,const std::string &context,void *p,void *renderer){
   tick();bool busy=false,waiting=false,stopping=false;if(!render_flags(renderer,busy,waiting,stopping))return fail("RENDER_STATE_UNREADABLE");
-  if(kind=="snapshot"){if(!args.empty())return fail("INVALID_ARGUMENT");guard=token();if(guard.empty())return fail("RANDOM_UNAVAILABLE");guard_context=context;guard_project=p;guard_time=GetTickCount64();return success({{"guard",guard},{"guardLifetimeSeconds",15},{"busy",busy||!active.empty()||profile_exclusive},{"pending",waiting},{"formats",json::array({"wav"})},{"sampleRates",json::array({44100,48000,96000})},{"mixdown",true},{"recoveryRequired",recovery_required}});}
+  if(kind=="snapshot"){if(!args.empty())return fail("INVALID_ARGUMENT");guard=token();if(guard.empty())return fail("RANDOM_UNAVAILABLE");guard_context=context;guard_project=p;guard_time=GetTickCount64();bool actual=busy||stopping||!active.empty();return success({{"guard",guard},{"guardLifetimeSeconds",15},{"busy",actual||profile_exclusive},{"actualExportBusy",actual},{"profileExclusive",profile_exclusive},{"pending",waiting},{"formats",json::array({"wav"})},{"sampleRates",json::array({44100,48000,96000})},{"mixdown",true},{"recoveryRequired",recovery_required}});}
   if(kind=="start"){
    if(profile_exclusive)return fail("PROFILE_BUSY");
    if(recovery_required)return fail("EXPORT_RECOVERY_REQUIRED");
