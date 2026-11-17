@@ -1,6 +1,8 @@
 #include "../loader/windows/export_native_service.h"
 #include <cassert>
 int main(){using namespace export_service;
+ std::array<int,4> values={1,1,2,1},applied{};assert(export_native::apply_choices(values,[&](size_t i,int id){applied[i]=id;return true;}));assert(applied==values);size_t calls=0;assert(!export_native::apply_choices(values,[&](size_t i,int){++calls;return i!=1;}));assert(calls==2);
+
  Job unseen;assert(observe(unseen,false,false,true,false,false)==Progress::waiting&&!unseen.native_done);
  Service service;Job changed;changed.phase="done";changed.error="EXPORT_PROJECT_CHANGED";changed.config_restored=false;assert(service.view(changed)["configRestored"]==false);Job unmodified;assert(service.view(unmodified)["configRestored"]==true);
  Job normal;assert(observe(normal,false,false,false,false,false)==Progress::waiting&&!normal.native_done);assert(observe(normal,true,true,false,false,false)==Progress::waiting);assert(observe(normal,false,true,true,false,false)==Progress::finished&&normal.native_done&&normal.error.empty());
