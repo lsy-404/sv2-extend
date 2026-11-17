@@ -15,3 +15,10 @@
 - 正式入口进程 86836 的 Core 模块路径匹配已安装目录；runtime receipt 证实 boxy.sv2 和 sv2.mcp 均 initResult=0，category binding ready、renderer=sv-components、foreignContentWindows=0。
 - CUA 实际点击 Scripts、恢复按钮、总显隐开关、MCP Refresh，通过可见控件与首选项/分类状态核对隐藏和恢复。随后仅正常关闭本轮启动的正式空工程并重启，继续检查持久化。
 - 正式入口重启后新宿主 97868 读回根入口 visible=false；实际点击 Scripts 底部按钮后根入口恢复、面板打开且开关 On，首选项保存 true。launcher 已退出，原其他 candidate 进程未动。安装 receipt 的 runtimeVerified 在真实验证后标记 true。
+- 重新核对远端 main 未受保护且没有新增远端提交，推送 Windows 已验证代码与审计至 main a69035d。
+- 经 SCP 获取 macOS 候选 bundle，verify 通过；其分支实际名为 codex/macos-native-host，首次按预设本地名 fetch 未命中，随后按 bundle 的真实 ref 成功导入并在独立 macOS worktree fast-forward 到 b6fdc09，未合入主分支。
+- Mac 实际插件 pane 验证 Unicode 草稿、150px 窄面板、长状态更新、输入对象保持与设置保存读回；registry 持久化、layout 和 plugin manager 回归返回 0。主 agent 审查后的焦点/行高保留和 probe 累积修正正在进入最终提交。
+- Mac 子 agent 发现 prepare-only 修改真实 Loader 目录选择后，完成有来源证据的恢复并读回验证；主 agent 已向用户说明，后续测试隔离 bundle ID。
+- 最终 Mac 分支 1c1d9bed96af3de1f0e4c2b54ba5a75406c172f1 经 bundle verify 导入，本地 macOS worktree fast-forward，再本地合并到 main；没有创建 PR。新布局测试源已移到根 test，相关 runner 产物改为 test/.outputs。
+- 审核最终 diff：旧 AppKit 控件承载实现删除且没有遗留引用；新控件具有内部链接、Unicode 字符串读写、对象解绑与销毁、延迟事件实例守卫、草稿保留和自适应行高。必要检查已通过，没有重复扩大测试。
+- Windows 和 macOS 安装与已验证范围写入 CROSS-PLATFORM/IMPLEMENTATION-STATUS；Mac 屏幕录制末次预检仍 false，未修改系统权限。
