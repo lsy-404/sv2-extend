@@ -19,6 +19,11 @@ core=core.replace('#include "editor_autostart.h"','#include "editor_autostart.h"
 core=core.replace(' native_panel::diagnostic();',' windows_entry_probe::tick(root);\n native_panel::diagnostic();')
 assert core.count('load_packages();startup_receipt();')==1
 
+registry=(source/'native_category_registry.h').read_text(encoding='utf-8')
+paint='static void bar_paint(void *bar,void *graphics) {'
+assert registry.count(paint)==1
+registry=registry.replace(paint,'static unsigned probe_native_paints;\n'+paint+'\n ++probe_native_paints;')
+(out/'native_category_registry.h').write_text(registry,encoding='utf-8')
 generated=out/'entry_probe_core.cpp'
 generated.write_text(core,encoding='utf-8')
 objects=[args.build_dir.resolve()/('minhook-'+name+'.o') for name in ('buffer','hook','trampoline','hde64')]
