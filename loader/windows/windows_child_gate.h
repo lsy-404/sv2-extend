@@ -15,6 +15,13 @@ inline std::set<std::wstring,insensitive> helpers;
 using Create=BOOL(WINAPI*)(LPCWSTR,LPWSTR,LPSECURITY_ATTRIBUTES,LPSECURITY_ATTRIBUTES,BOOL,DWORD,LPVOID,LPCWSTR,LPSTARTUPINFOW,LPPROCESS_INFORMATION);
 using Shell=HINSTANCE(WINAPI*)(HWND,LPCWSTR,LPCWSTR,LPCWSTR,LPCWSTR,INT);
 inline Create original_create=nullptr;inline Shell original_shell=nullptr;
+using Navigation=int(*)(LPCWSTR);
+inline Navigation navigation=nullptr;
+inline bool navigation_url(LPCWSTR operation,LPCWSTR file,LPCWSTR parameters){
+ if(!file||!*file||(operation&&CompareStringOrdinal(operation,-1,L"open",-1,TRUE)!=CSTR_EQUAL)||(parameters&&*parameters))return false;
+ auto alpha=[](wchar_t c){return (c>=L'a'&&c<=L'z')||(c>=L'A'&&c<=L'Z');};
+ if(!alpha(file[0]))return false;size_t i=1;for(;file[i]&&i<32768;++i){wchar_t c=file[i];if(c==L':')return i>1;if(!alpha(c)&&!(c>=L'0'&&c<=L'9')&&c!=L'+'&&c!=L'-'&&c!=L'.')return false;}return false;
+}
 inline bool physical(const wchar_t *path,std::wstring &resolved){
  if(!path||!*path)return false;std::wstring value(path);wchar_t full[32768];DWORD n=GetFullPathNameW(path,32768,full,nullptr);
  if(!n||n>=32768||CompareStringOrdinal(path,-1,full,-1,TRUE)!=CSTR_EQUAL)return false;
@@ -28,6 +35,7 @@ inline BOOL WINAPI on_create(LPCWSTR application,LPWSTR command,LPSECURITY_ATTRI
  BOOL result=original_create(resolved.c_str(),command,processSecurity,threadSecurity,inherit,flags,environment,directory,startup,process);if(result)++current.generation;return result;
 }
 inline HINSTANCE WINAPI on_shell(HWND window,LPCWSTR operation,LPCWSTR file,LPCWSTR parameters,LPCWSTR directory,INT show){
+ auto route=navigation;if(route&&navigation_url(operation,file,parameters)){int decision=route(file);if(decision==1)return reinterpret_cast<HINSTANCE>(static_cast<INT_PTR>(33));if(decision<0){std::lock_guard<std::recursive_mutex> lock(mutex);++current.denied;SetLastError(ERROR_ACCESS_DENIED);return reinterpret_cast<HINSTANCE>(static_cast<INT_PTR>(SE_ERR_ACCESSDENIED));}}
  std::lock_guard<std::recursive_mutex> lock(mutex);
  if(!current.blocked)return original_shell(window,operation,file,parameters,directory,show);
  ++current.denied;SetLastError(ERROR_ACCESS_DENIED);return reinterpret_cast<HINSTANCE>(static_cast<INT_PTR>(SE_ERR_ACCESSDENIED));

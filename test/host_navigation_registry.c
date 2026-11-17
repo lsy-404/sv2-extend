@@ -1,4 +1,4 @@
-#include "../loader/macos/host_navigation_registry.h"
+#include "../loader/host_navigation_registry.h"
 #include <assert.h>
 #include <stdio.h>
 static navigation_registry registry;

@@ -1,6 +1,6 @@
 #import <AppKit/AppKit.h>
 #import <objc/runtime.h>
-#include "host_navigation_registry.h"
+#include "../host_navigation_registry.h"
 
 static navigation_registry registry;
 static BOOL (*original_open_url)(id,SEL,NSURL *);

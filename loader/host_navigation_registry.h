@@ -1,6 +1,6 @@
 #ifndef HOST_NAVIGATION_REGISTRY_H
 #define HOST_NAVIGATION_REGISTRY_H
-#include "../../sdk/include/loader_api.h"
+#include "../sdk/include/loader_api.h"
 #include <string.h>
 
 typedef struct { char owner[129]; loader_host_navigation_handler handler; void *context; uint64_t serial; } navigation_entry;
