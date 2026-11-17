@@ -1,0 +1,16 @@
+#include "../loader/windows/long_path_adapter.h"
+#include <cassert>
+#include <string>
+static std::wstring extended(const std::wstring &path){return L"\\\\?\\"+path;}
+int wmain(int argc,wchar_t **argv){
+ if(argc!=3)return 2;std::wstring root=argv[1],library=argv[2];assert(GetFileAttributesW(root.c_str())!=INVALID_FILE_ATTRIBUTES);
+ std::wstring parent=root;for(int i=0;i<3;i++){parent+=L"\\"+std::wstring(70,wchar_t(L'a'+i));auto path=extended(parent);assert(CreateDirectoryW(path.c_str(),nullptr)||GetLastError()==ERROR_ALREADY_EXISTS);}
+ std::wstring target=parent+L"\\sample.dnni";assert(target.size()>=MAX_PATH);auto native=extended(target);HANDLE file=CreateFileW(native.c_str(),GENERIC_WRITE,0,nullptr,CREATE_ALWAYS,FILE_ATTRIBUTE_NORMAL,nullptr);assert(file!=INVALID_HANDLE_VALUE);DWORD written=0;assert(WriteFile(file,"abc",3,&written,nullptr)&&written==3);CloseHandle(file);
+ assert(MH_Initialize()==MH_OK);assert(long_path_adapter::install(root));std::wstring converted;assert(long_path_adapter::convert(target.c_str(),converted)&&converted==native);
+ assert(!long_path_adapter::convert((root+L"-other"+target.substr(root.size())).c_str(),converted));assert(!long_path_adapter::convert((root+L"\\..\\other"+target.substr(root.size())).c_str(),converted));assert(!long_path_adapter::convert((target+L".").c_str(),converted));assert(!long_path_adapter::convert((parent+L"\\NUL.txt").c_str(),converted));assert(!long_path_adapter::convert(L"relative.dnni",converted));assert(!long_path_adapter::convert((root+L"\\short.dnni").c_str(),converted));assert(!long_path_adapter::convert(native.c_str(),converted));
+ assert(GetFileAttributesW(target.c_str())!=INVALID_FILE_ATTRIBUTES);WIN32_FILE_ATTRIBUTE_DATA attrs{};assert(GetFileAttributesExW(target.c_str(),GetFileExInfoStandard,&attrs)&&attrs.nFileSizeLow==3);
+ file=CreateFileW(target.c_str(),GENERIC_READ,FILE_SHARE_READ,nullptr,OPEN_EXISTING,FILE_ATTRIBUTE_NORMAL,nullptr);assert(file!=INVALID_HANDLE_VALUE);char body[3]{};DWORD read=0;assert(ReadFile(file,body,3,&read,nullptr)&&read==3&&body[0]=='a'&&body[2]=='c');CloseHandle(file);
+ std::wstring created=parent+L"\\created.dnni";file=CreateFileW(created.c_str(),GENERIC_WRITE,0,nullptr,CREATE_ALWAYS,FILE_ATTRIBUTE_NORMAL,nullptr);assert(file!=INVALID_HANDLE_VALUE);assert(WriteFile(file,"xy",2,&written,nullptr)&&written==2);CloseHandle(file);WIN32_FILE_ATTRIBUTE_DATA createdInfo{};assert(GetFileAttributesExW(created.c_str(),GetFileExInfoStandard,&createdInfo)&&createdInfo.nFileSizeLow==2);
+ HMODULE route=LoadLibraryW(library.c_str());assert(route);auto install=reinterpret_cast<int(WINAPI*)()>(GetProcAddress(route,"install_fixture"));auto calls=reinterpret_cast<int(WINAPI*)()>(GetProcAddress(route,"fixture_calls"));assert(install&&calls&&install()==0);file=CreateFileW(target.c_str(),GENERIC_READ,FILE_SHARE_READ,nullptr,OPEN_EXISTING,FILE_ATTRIBUTE_NORMAL,nullptr);assert(file!=INVALID_HANDLE_VALUE&&calls()>0);CloseHandle(file);
+ long_path_adapter::profile=L"\\\\server\\share\\profile";std::wstring unc=long_path_adapter::profile+L"\\"+std::wstring(250,L'x')+L".dnni";assert(long_path_adapter::convert(unc.c_str(),converted));assert(converted==L"\\\\?\\UNC\\"+unc.substr(2));return 0;
+}

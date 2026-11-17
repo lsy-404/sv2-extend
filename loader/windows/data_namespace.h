@@ -3,6 +3,8 @@
 #include <string>
 #include <cstring>
 #include <atomic>
+#include <filesystem>
+#include "long_path_adapter.h"
 #include "vendor/minhook/include/MinHook.h"
 
 namespace data_namespace {
@@ -27,6 +29,6 @@ static bool install(const std::wstring &directory){
  LPVOID replacements[]={(LPVOID)known,(LPVOID)path,(LPVOID)special};
  LPVOID *originals[]={(LPVOID*)&known_original,(LPVOID*)&folder_original,(LPVOID*)&special_original};
  for(unsigned i=0;i<3;i++)if(MH_CreateHook(targets[i],replacements[i],originals[i])!=MH_OK||MH_QueueEnableHook(targets[i])!=MH_OK){MH_Uninitialize();return false;}
- if(MH_ApplyQueued()!=MH_OK){MH_Uninitialize();return false;}return true;
+ if(MH_ApplyQueued()!=MH_OK){MH_Uninitialize();return false;}if(!long_path_adapter::install(std::filesystem::path(directory).parent_path().wstring())){MH_Uninitialize();return false;}return true;
 }
 }
