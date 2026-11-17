@@ -137,7 +137,7 @@ void network_tick(){
   try{auto host=fs::u8path(executable).wstring();network_controller=std::make_unique<windows_network::Controller>(host,bootstrap_network_state.generation);network_controller->adopt(bootstrap_network_state.requested_blocked);}
   catch(const std::exception&){bootstrap_network_state.policy_applied=false;bootstrap_network_state.error=LOADER_ERR_NETWORK_UNVERIFIED;log_message("network-controller-initialization-failed");}
  }
- if(network_controller){auto state=network_controller->state();if(state.policy_applied&&!state.pending&&!state.error&&!state.applied_blocked){windows_socket_gate::setblocked(false);windows_child_gate::setblocked(false);windows_webview_gate::setblocked(false);}}
+ if(network_controller){auto state=network_controller->state();if(state.policy_applied&&!state.pending&&!state.error&&!state.requested_blocked&&!state.applied_blocked){windows_socket_gate::setblocked(false);windows_child_gate::setblocked(false);windows_webview_gate::setblocked(false);}}
  web_retirement_tick();
 }
 int network_policy(loader_network_policy_state_v1 *state){
