@@ -9,6 +9,7 @@
 #include <libproc.h>
 #include <unistd.h>
 #include <stdint.h>
+#include <cmath>
 #include <string.h>
 #include <sys/stat.h>
 extern "C" bool loader_native_panel_owns(void*,void*);
@@ -82,15 +83,47 @@ static void deletingDestroy(void *pane){remove(pane);((void(*)(void*))(slide+0x1
 static void barLayout(void *bar){
  ((void(*)(void*))(slide+0x101020c84ULL))(bar);if(!bars)bars=[NSMutableSet set];[bars addObject:[NSValue valueWithPointer:bar]];ensureTimer();
  void **buttons=*(void***)((char*)bar+0x220);int count=*(int*)((char*)bar+0x22c);void **entries=*(void***)(slide+0x10161f218ULL);int entryCount=*(int*)(slide+0x10161f224ULL);if(count!=entryCount||count<1||count>64)return;
- int active=0;for(int i=0;i<count;i++){auto c=fromSelf(entries[i]);if(!c||(c->present&&c->visible))active++;}
- int width=*(int*)((char*)bar+0x40),height=*(int*)((char*)bar+0x44);int row=MIN(48,MAX(12,(height-28)/MAX(1,active))),y=8;
+ int active=0;bool hasExtend=false;for(int i=0;i<count;i++){auto c=fromSelf(entries[i]);if(!c||(c->present&&c->visible)){active++;if(c)hasExtend=true;}}
+ int width=*(int*)((char*)bar+0x40),height=*(int*)((char*)bar+0x44);int row=MIN(48,MAX(12,(height-(hasExtend?40:28))/MAX(1,active))),y=8;bool grouped=false;
  for(int i=0;i<count;i++){void *button=buttons[i];auto c=fromSelf(entries[i]);bool visible=!c||(c->present&&c->visible);((void(*)(void*,bool))(*(void***)button)[0x60/8])(button,visible);if(!visible){((void(*)(void*,int,int,int,int))(slide+0x1007ff7dcULL))(button,0,0,0,0);continue;}
  if(!c){const char *label=*(const char**)((char*)button+0x298);if(label&&!strcmp(label,"LICENSE"))y+=12;}
- else{uintptr_t *label=(uintptr_t*)((char*)button+0x298);if(strcmp((const char*)*label,c->label)){((void(*)(void*))(slide+0x100699298ULL))(label);*label=((uintptr_t(*)(const char*))(slide+0x100662a08ULL))(c->label);}}
+ else{if(!grouped){y+=12;grouped=true;}uintptr_t *label=(uintptr_t*)((char*)button+0x298);if(strcmp((const char*)*label,c->label)){((void(*)(void*))(slide+0x100699298ULL))(label);*label=((uintptr_t(*)(const char*))(slide+0x100662a08ULL))(c->label);}}
  ((void(*)(void*,int,int,int,int))(slide+0x1007ff7dcULL))(button,0,y,width,row);y+=row;
  }
 }
-static void barPaint(void *bar,void *graphics){barLayout(bar);((void(*)(void*,void*))(slide+0x1010206fcULL))(bar,graphics);}
+struct LineTransform {float scale;int thickness;float first[6],second[6];uint64_t reserved[2];};
+static_assert(sizeof(LineTransform)==0x48,"Invalid line transform size");
+static void drawGroupLine(void *bar,void *graphics,int y){
+ LineTransform t{};
+ ((void(*)(void*,void*,uint64_t))(slide+0x1010a7f30ULL))(&t,bar,0);
+ auto map=[](const float *m,float x,float y,float &ox,float &oy){
+  ox=m[0]*x+m[1]*y+m[2];oy=m[3]*x+m[4]*y+m[5];
+ };
+ float x1,y1,x2,y2;
+ map(t.first,6,(float)y,x1,y1);
+ map(t.first,(float)(*(int*)((char*)bar+0x40)-6),(float)(y+1),x2,y2);
+ float left=std::nearbyintf(MIN(x1,x2)),right=std::nearbyintf(MAX(x1,x2));
+ float top=std::nearbyintf(MIN(y1,y2));
+ map(t.second,left,top,x1,y1);
+ map(t.second,right,top+MAX(0,t.thickness),x2,y2);
+ float rect[]={MIN(x1,x2),MIN(y1,y2),std::fabs(x2-x1),std::fabs(y2-y1)};
+ uint32_t color=0x40000000U|(*(uint32_t*)(slide+0x101617f0cULL)&0xffffffU);
+ ((void(*)(void*,uint32_t))(slide+0x1006c66ecULL))(graphics,color);
+ void *context=*(void**)((char*)graphics+8);
+ ((void(*)(void*,const float*))(*(void***)context)[0xb8/8])(context,rect);
+}
+static void barPaint(void *bar,void *graphics){
+ barLayout(bar);
+ ((void(*)(void*,void*))(slide+0x1010206fcULL))(bar,graphics);
+ void **buttons=*(void***)((char*)bar+0x220);
+ void **entries=*(void***)(slide+0x10161f218ULL);
+ int count=*(int*)((char*)bar+0x22c),entryCount=*(int*)(slide+0x10161f224ULL);
+ if(count!=entryCount||count<1||count>64)return;
+ for(int i=0;i<count;i++){
+  auto c=fromSelf(entries[i]);if(!c||!c->present||!c->visible)continue;
+  drawGroupLine(bar,graphics,*(int*)((char*)buttons[i]+0x3c)-6);break;
+ }
+}
 static void barDestroy(void *bar){[bars removeObject:[NSValue valueWithPointer:bar]];((void(*)(void*))(slide+0x101020e60ULL))(bar);}
 static void barDeletingDestroy(void *bar){[bars removeObject:[NSValue valueWithPointer:bar]];((void(*)(void*))(slide+0x101020f4cULL))(bar);}
 static void closeCategory(Category *category){for(NSValue *key in bars.allObjects){void *container=*(void**)((char*)key.pointerValue+0xf8);void *model=((void*(*)(void*,void*))(slide+0x101024958ULL))(container,&category->object);if(model&&!*(uint8_t*)((char*)model+0x34)){HostString reason=string("user");((void(*)(void*,void*,const void*))(slide+0x101024b0cULL))(container,&category->object,&reason);}}}
