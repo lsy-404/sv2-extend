@@ -1,0 +1,5 @@
+#include "../loader/windows/native_widgets.h"
+namespace editor_gate {bool version_matches(){return false;}}
+static bool owned(void*){return true;}
+static void enqueue(void*){}
+int main(){native_widgets::Toggle toggle;native_widgets::Button button;native_widgets::Choice choice;native_widgets::TextBox text;const char *items[]={"one"};std::string value;int selected=0;DWORD thread=GetCurrentThreadId();if(toggle.create(nullptr,owned,thread,"toggle",enqueue,nullptr)||button.create(nullptr,owned,thread,"button",enqueue,nullptr)||choice.create(nullptr,owned,thread,"choice",items,1)||text.create(nullptr,owned,thread,"text")||choice.get(selected)||text.get_text(value))return 1;unsigned char fake[1024]{};if(toggle.create(fake,owned,thread,"toggle",enqueue,nullptr)||button.create(fake,owned,thread,"button",enqueue,nullptr)||choice.create(fake,owned,thread,"choice",items,1)||text.create(fake,owned,thread,"text"))return 3;if(toggle.component()||button.component()||choice.component()||text.component()||toggle.set_caption("x")||button.set_caption("x"))return 4;if(!toggle.destroy()||!button.destroy()||!choice.destroy()||!text.destroy())return 2;return 0;}

@@ -6,6 +6,7 @@
 #include <cmath>
 #include <cstdint>
 #include <cstring>
+#include "native_string.h"
 #include <set>
 #include <string>
 #include <vector>
@@ -30,8 +31,10 @@ static const char *prepare_result="not_attempted";
 struct Entry { const char *id; const char *title; bool visible; };
 using DockUpdate = void (*)(void *, const char *, HWND, const RECT &, bool);
 using DockRemove = void (*)(void *);
+using OwnsChild = bool (*)(void *, void *);
 static DockUpdate dock_update;
 static DockRemove dock_remove;
+static OwnsChild owns_child;
 static HWND host_window;
 static std::set<void *> panes;
 static std::set<void *> bars;
@@ -68,12 +71,10 @@ static Category *pane_category(void *pane) {
  std::memcpy(&model, bytes + 0x140, sizeof model);
  return readable(model, sizeof(void *)) ? model_category(model) : nullptr;
 }
-struct PointF { float x, y; };
 struct RectI { int x, y, width, height; };
 #ifdef NATIVE_CATEGORY_TEST
 static RectI *(*test_content)(void *, RectI *);
-static PointF *(*test_point)(PointF *, void *, void *, uint64_t);
-static BOOL (*test_client)(HWND, RECT *);
+static void (*test_set_visible)(void *, bool);
 #endif
 static bool pane_bounds(void *pane, HWND host, RECT &result, bool &showing) {
  auto node = static_cast<unsigned char *>(pane);
@@ -81,12 +82,9 @@ static bool pane_bounds(void *pane, HWND host, RECT &result, bool &showing) {
  for (unsigned depth = 0; depth < 128; ++depth) {
   if (!readable(node, 0xe9)) return false;
   showing = showing && (node[0xe8] & 2);
-  unsigned char *parent = nullptr; void *transform = nullptr;
+  unsigned char *parent = nullptr;
   std::memcpy(&parent, node + 0x30, sizeof parent);
-  std::memcpy(&transform, node + 0x50, sizeof transform);
-  if (transform && !readable(transform, 24)) return false;
-  if (!parent) { if (transform) return false; root = node; break; }
-  if (node[0xe8] & 1) return false;
+  if (!parent) { root = node; break; }
   node = parent;
  }
  if (!root || !readable(image + 0x17f0f38, sizeof(void *))) return false;
@@ -112,18 +110,6 @@ static bool pane_bounds(void *pane, HWND host, RECT &result, bool &showing) {
  if (matches != 1) return false;
  DWORD pid = 0;
  if (GetWindowThreadProcessId(host, &pid) != thread_id || pid != GetCurrentProcessId()) return false;
- int root_width = 0, root_height = 0;
- std::memcpy(&root_width, root + 0x40, 4); std::memcpy(&root_height, root + 0x44, 4);
- RECT client{};
-#ifdef NATIVE_CATEGORY_TEST
- BOOL got_client = test_client ? test_client(host, &client) : GetClientRect(host, &client);
-#else
- BOOL got_client = GetClientRect(host, &client);
-#endif
- int client_width = client.right - client.left, client_height = client.bottom - client.top;
- if (!got_client || root_width <= 0 || root_width > 32768 || root_height <= 0 || root_height > 32768 || client_width <= 0 || client_width > 131072 || client_height <= 0 || client_height > 131072) return false;
- double sx = static_cast<double>(client_width) / root_width, sy = static_cast<double>(client_height) / root_height;
- if (sx < 0.25 || sx > 8 || sy < 0.25 || sy > 8) return false;
  void *table = nullptr; std::memcpy(&table, pane, sizeof table);
  if (table != image + 0x14ec388 || !readable(static_cast<unsigned char *>(table) + 0x1e8, sizeof(void *))) return false;
 #ifndef NATIVE_CATEGORY_TEST
@@ -136,19 +122,7 @@ static bool pane_bounds(void *pane, HWND host, RECT &result, bool &showing) {
 #endif
  reinterpret_cast<RectI *(*)(void *, RectI *)>(image + 0xbcf2a0)(pane, &area);
  if (area.x < 0 || area.y < 0 || area.width <= 0 || area.width > 32768 || area.height <= 0 || area.height > 32768 || area.x > 32768 || area.y > 32768) return false;
- PointF corners[] = {{static_cast<float>(area.x), static_cast<float>(area.y)}, {static_cast<float>(area.x + area.width), static_cast<float>(area.y)}, {static_cast<float>(area.x), static_cast<float>(area.y + area.height)}, {static_cast<float>(area.x + area.width), static_cast<float>(area.y + area.height)}};
- for (auto &corner : corners) {
-  uint64_t packed = 0; std::memcpy(&packed, &corner, sizeof packed); PointF mapped{};
-#ifdef NATIVE_CATEGORY_TEST
-  if (test_point) test_point(&mapped, root, pane, packed); else
-#endif
-  reinterpret_cast<PointF *(*)(PointF *, void *, void *, uint64_t)>(image + 0xcd7b00)(&mapped, root, pane, packed);
-  if (!std::isfinite(mapped.x) || !std::isfinite(mapped.y) || std::abs(mapped.x) > 131072 || std::abs(mapped.y) > 131072) return false;
-  corner = mapped;
- }
- constexpr float tolerance = 0.25f;
- if (std::abs(corners[0].y - corners[1].y) > tolerance || std::abs(corners[2].y - corners[3].y) > tolerance || std::abs(corners[0].x - corners[2].x) > tolerance || std::abs(corners[1].x - corners[3].x) > tolerance || corners[1].x <= corners[0].x || corners[2].y <= corners[0].y) return false;
- result = {static_cast<LONG>(std::lround(corners[0].x * sx)), static_cast<LONG>(std::lround(corners[0].y * sy)), static_cast<LONG>(std::lround(corners[3].x * sx)), static_cast<LONG>(std::lround(corners[3].y * sy))};
+ result = {area.x, area.y, area.x + area.width, area.y + area.height};
  return true;
 }
 static void update_pane(void *pane) {
@@ -166,6 +140,10 @@ static void update_pane(void *pane) {
  for (int i = 0; i < count; ++i) {
   void *child = children[i];
   if (!readable(child, 0xe9)) return;
+  if (owns_child && owns_child(pane, child)) continue;
+#ifdef NATIVE_CATEGORY_TEST
+  if (test_set_visible) test_set_visible(child, false); else
+#endif
   reinterpret_cast<SetVisible>(image + 0xc4e5b0)(child, false);
   if (!panes.count(pane)) return;
  }
@@ -220,7 +198,7 @@ static bool button_title(void *button, const char *title) {
  auto old = *slot;
  if (reinterpret_cast<int (*)(const char *, const char *)>(image + 0xe71e00)(static_cast<const char *>(old), title) == 0) return true;
  void *replacement = nullptr;
- reinterpret_cast<void *(*)(void *, const char *)>(image + 0xe6fac0)(&replacement, title);
+ native_string::init(image,&replacement,title);
  if (!replacement) return false;
  *slot = replacement;
  if (release_string(old)) return true;
@@ -334,8 +312,7 @@ static bool install_lifecycle(unsigned char *base) {
 }
 static void *name(void *object, void *output) {
  auto category = registry_category(object);
- using StringInit = void *(*)(void *, const char *);
- return reinterpret_cast<StringInit>(image + 0xe6fac0)(output, category ? category->title : "Extend");
+ return native_string::init(image,output,category ? category->title : "Extend");
 }
 static int position(void *object) {
  auto category = registry_category(object);
@@ -359,10 +336,10 @@ static void *make_model(void *object) {
 }
 static void *no_destroy(void *object, unsigned) { return object; }
 
-static bool prepare(unsigned char *base, DWORD main_thread, DockUpdate update, DockRemove remove) {
- if (prepared) return base == image && main_thread == thread_id && GetCurrentThreadId() == main_thread && update == dock_update && remove == dock_remove;
+static bool prepare(unsigned char *base, DWORD main_thread, DockUpdate update, DockRemove remove, OwnsChild owns) {
+ if (prepared) return base == image && main_thread == thread_id && GetCurrentThreadId() == main_thread && update == dock_update && remove == dock_remove && owns == owns_child;
  prepare_result="unsupported_host";
- if (!base || !main_thread || !update || !remove || GetCurrentThreadId() != main_thread || !editor_gate::version_matches()) return false;
+ if (!base || !main_thread || !update || !remove || !owns || GetCurrentThreadId() != main_thread || !editor_gate::version_matches()) return false;
  auto registry = reinterpret_cast<void **>(base + 0x14ec5b0);
  auto model = reinterpret_cast<void **>(base + 0x14eaca0);
  const size_t expected[] = {0x926a50, 0xbd7870, 0xbd79b0, 0xbd78a0, 0xbd7b50};
@@ -374,16 +351,16 @@ static bool prepare(unsigned char *base, DWORD main_thread, DockUpdate update, D
  prepare_result="factory_signature";
  if (std::memcmp(base + 0xbd7b50, factory_signature, sizeof factory_signature)) return false;
  constexpr unsigned char content_signature[] = {0x48,0x89,0x5c,0x24,0x08,0x48,0x89,0x6c,0x24,0x10,0x48,0x89,0x74,0x24,0x18};
- constexpr unsigned char point_signature[] = {0x48,0x89,0x5c,0x24,0x08,0x48,0x89,0x74,0x24,0x10,0x57,0x48,0x83,0xec,0x40};
  constexpr unsigned char height_signature[] = {0xb8,0x2c,0,0,0,0xc3};
  prepare_result="geometry_signature";
- if (std::memcmp(base + 0xbcf2a0, content_signature, sizeof content_signature) || std::memcmp(base + 0xcd7b00, point_signature, sizeof point_signature) || std::memcmp(base + 0x8ec3f0, height_signature, sizeof height_signature)) return false;
+ if (std::memcmp(base + 0xbcf2a0, content_signature, sizeof content_signature) || std::memcmp(base + 0x8ec3f0, height_signature, sizeof height_signature)) return false;
  constexpr unsigned char parse_signature[] = {0x48,0x89,0x5c,0x24,0x08,0x48,0x89,0x74,0x24,0x10};
  prepare_result="drawable_signature";if (std::memcmp(base + 0xe588e0, parse_signature, sizeof parse_signature) || std::memcmp(base + 0xc68000, parse_signature, sizeof parse_signature)) return false;
  image = base;
  thread_id = main_thread;
  dock_update = update;
  dock_remove = remove;
+ owns_child = owns;
  prepare_result="lifecycle_slots";if (!install_lifecycle(base)) return false;
  for (unsigned i = 0; i < capacity; ++i) {
   auto &category = categories[i];

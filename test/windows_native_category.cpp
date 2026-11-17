@@ -5,9 +5,10 @@
 
 bool editor_gate::version_matches() { return false; }
 static int updates, hidden_updates;
-static float point_scale = 1;
-static int client_width = 300, client_height = 600;
-static RECT expected_bounds{23, 107, 173, 341};
+static RECT expected_bounds{0, 44, 100, 200};
+static void *owned_component;static int hidden_owned,hidden_foreign;
+static bool owned(void*,void *child){return child==owned_component;}
+static void set_visible(void *child,bool visible){if(!visible){if(child==owned_component)++hidden_owned;else ++hidden_foreign;}}
 static int protection_call, fail_protection_call;
 static BOOL fail_protect(void *address, SIZE_T size, DWORD protection, DWORD *old) {
  if (++protection_call == fail_protection_call) return FALSE;
@@ -19,18 +20,11 @@ static void updated(void *, const char *id, HWND, const RECT &rect, bool visible
 }
 static void removed(void *) {}
 static native_category_registry::RectI *content(void *, native_category_registry::RectI *out) { *out = {0, 44, 100, 156}; return out; }
-static native_category_registry::PointF *point(native_category_registry::PointF *out, void *, void *component, uint64_t packed) {
- std::memcpy(out, &packed, sizeof packed);
- int x = 0, y = 0; auto p = static_cast<unsigned char *>(component);
- std::memcpy(&x, p + 0x38, 4); std::memcpy(&y, p + 0x3c, 4);
- out->x = out->x * point_scale + x; out->y = out->y * point_scale + y; return out;
-}
-static BOOL client(HWND, RECT *out) { *out = {0, 0, client_width, client_height}; return TRUE; }
 template<class T> static void put(unsigned char *where, size_t offset, T value) { std::memcpy(where + offset, &value, sizeof value); }
 int main() {
  using namespace native_category_registry;
  (void)&set_host; (void)&tick; (void)&open_category; (void)&close_category; (void)&category_open; (void)&status;
- if (prepare(reinterpret_cast<unsigned char *>(1), GetCurrentThreadId(), updated, removed)) return 3;
+ if (prepare(reinterpret_cast<unsigned char *>(1), GetCurrentThreadId(), updated, removed, owned)) return 3;
  SYSTEM_INFO system{}; GetSystemInfo(&system);
  auto memory = static_cast<unsigned char *>(VirtualAlloc(nullptr, system.dwPageSize * 2, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE));
  if (!memory) return 7;
@@ -58,12 +52,13 @@ int main() {
  VirtualFree(fake, 0, MEM_RELEASE); image = nullptr;
  HWND host = CreateWindowExW(0, L"STATIC", L"", 0, 0, 0, 0, 0, HWND_MESSAGE, nullptr, GetModuleHandleW(nullptr), nullptr);
  if (!host) return 1;
- host_window = host; dock_update = updated; dock_remove = removed; prepared = true; thread_id = GetCurrentThreadId();
+ host_window = host; dock_update = updated; dock_remove = removed; owns_child = owned; prepared = true; thread_id = GetCurrentThreadId();
  image = static_cast<unsigned char *>(VirtualAlloc(nullptr, 0x1801000, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE));
  if (!image) return 21;
- test_content = content; test_point = point; test_client = client;
+ test_content = content; test_set_visible = set_visible;
  auto &category = categories[1]; std::strcpy(category.id, "example"); category.present = category.visible = true;
  unsigned char pane[0x148]{}, parent[0xe9]{}, model[8]{}, unrelated[8]{}, desktop[0xe0]{}, peer[0x100]{};
+ unsigned char own[0xe9]{},foreign[0xe9]{};owned_component=own;void *children[]={own,foreign};put(pane,0x58,static_cast<void *>(children));put(pane,0x64,2);
  void *peer_list[] = {peer};
  put(image, 0x17f0f38, static_cast<void *>(desktop));
  put(desktop, 0xd0, static_cast<void *>(peer_list)); put(desktop, 0xdc, 1);
@@ -74,12 +69,11 @@ int main() {
  put(pane, 0x38, 15); put(pane, 0x3c, 27); put(pane, 0x40, 100); put(pane, 0x44, 200);
  put(parent, 0x40, 200); put(parent, 0x44, 400); pane[0xe8] = 2; parent[0xe8] = 3;
  update_pane(pane);
- point_scale = 2; expected_bounds = {23, 173, 323, 641}; update_pane(pane); point_scale = 1;
- put(parent, 0x40, 2560); put(parent, 0x44, 1370); client_width = 3840; client_height = 2054;
- expected_bounds = {23, 106, 173, 340}; update_pane(pane);
+ update_pane(pane);
+ put(parent, 0x40, 2560); put(parent, 0x44, 1370); update_pane(pane);
  put(peer, 0xf8, static_cast<HWND>(nullptr)); update_pane(pane); put(peer, 0xf8, host);
- put(parent, 0x50, static_cast<void *>(peer)); update_pane(pane); put(parent, 0x50, static_cast<void *>(nullptr));
- if (hidden_updates != 2) return 22;
+ parent[0xe8]=1; update_pane(pane);parent[0xe8]=3;
+ if (hidden_updates != 2 || hidden_owned != 0 || hidden_foreign != 5) return 22;
  put(pane, 0x140, static_cast<void *>(unrelated)); update_pane(pane);
  if (updates != 3 || panes.size() != 1) return 2;
  thread_id = GetCurrentThreadId(); dock_update = nullptr;

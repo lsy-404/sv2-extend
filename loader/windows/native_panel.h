@@ -2,29 +2,66 @@
 #define EXTEND_NATIVE_PANEL_H
 #include <windows.h>
 #include <map>
+#include <memory>
 #include <string>
 #include <vector>
 #include <set>
-#include <cmath>
 #include <filesystem>
 #include <fstream>
+#include <cmath>
 #include "vendor/json.hpp"
+#include "native_widgets.h"
+#include "native_label.h"
+#include "native_viewport.h"
 #include "../../sdk/include/loader_api.h"
 
 namespace native_panel {
 using json=nlohmann::json;
 struct Plugin { json descriptor, values; loader_plugin_ui_event event; void *owner; };
-struct Control { std::string plugin, key, type; };
-static std::map<std::string,Plugin> plugins;
 struct Category { std::string id, title; bool visible; };
-struct Pane { void *identity; std::string id; HWND window; std::map<int,Control> controls; int content_height=0,scroll=0; UINT dpi=96; HFONT font=nullptr; bool rebuilding=false; Pane(void *key,const char *value):identity(key),id(value),window(nullptr){} };
+struct Control {
+ std::string plugin,key,type,caption,observed;
+ json value;
+ native_widgets::Toggle toggle;
+ native_widgets::Button button;
+ native_widgets::Choice choice;
+ native_widgets::TextBox textbox;
+ native_widgets_label::Label label;
+ unsigned pending=0;
+ ULONGLONG edited_at=0;
+ int measured_width=-1,label_height=26;
+ void *component() const {
+  if(type=="label")return label.component();
+  if(type=="boolean"||type=="visible")return toggle.component();
+  if(type=="choice")return choice.component();
+  if(type=="text"||type=="integer")return textbox.component();
+  return button.component();
+ }
+ bool destroy(){return toggle.destroy()&&button.destroy()&&choice.destroy()&&textbox.destroy()&&label.destroy();}
+ bool layout(int x,int y,int w,int h){
+  if(type=="label")return label.layout(x,y,w,h);
+  if(type=="boolean"||type=="visible")return toggle.layout(x,y,w,h);
+  if(type=="choice")return choice.layout(x,y,w,h);
+  if(type=="text"||type=="integer")return textbox.layout(x,y,w,h);
+  return button.layout(x,y,w,h);
+ }
+};
+struct Pane {
+ void *identity;std::string id;HWND window;
+ RECT bounds{};bool visible=false,ready=false;
+ native_viewport::Viewport viewport;
+ native_viewport::Component content;
+ std::map<std::string,std::unique_ptr<Control>> controls;
+ std::vector<std::string> order;
+ Pane(void *key,const char *value):identity(key),id(value),window(nullptr){}
+};
+static std::map<std::string,Plugin> plugins;
 static std::map<void*,Pane> panes;
 static HWND dispatcher=nullptr,host=nullptr;
 static DWORD thread_id=0;
-static HBRUSH background=nullptr, field_background=nullptr;
-static std::filesystem::path preference_file, diagnostic_file;
+static std::filesystem::path preference_file,diagnostic_file;
 static std::string last_diagnostic;
-static json preferences=json::object(), visibility=json::object(), preference_document=json::object();
+static json preferences=json::object(),visibility=json::object(),preference_document=json::object();
 static bool preferences_writable=false;
 static void (*categories_changed)()=nullptr;
 static int (*open_category)(const char*)=nullptr;
@@ -60,50 +97,124 @@ static bool save_state(const json &next,const json &next_visibility) {
 }
 static bool save_values(const std::string &id,const json &values){auto next=preferences;next[id]=values;return save_state(next,visibility);}
 static void notify(const std::string &id,const json &event) {auto it=plugins.find(id);if(it==plugins.end()||!it->second.event)return; auto callback=it->second.event;auto owner=it->second.owner;std::string body=event.dump();callback(body.c_str(),owner);}
-static std::string utf8(const std::wstring &s){int n=WideCharToMultiByte(CP_UTF8,WC_ERR_INVALID_CHARS,s.data(),(int)s.size(),nullptr,0,nullptr,nullptr);if(n<=0)return {};std::string out((size_t)n,'\0');WideCharToMultiByte(CP_UTF8,WC_ERR_INVALID_CHARS,s.data(),(int)s.size(),out.data(),n,nullptr,nullptr);return out;}
 [[maybe_unused]] static std::vector<Category> categories(){std::vector<Category> result;for(const auto &p:plugins)result.push_back({p.first,p.second.descriptor["name"].get<std::string>(),!visibility.contains(p.first)||!visibility[p.first].is_boolean()||visibility[p.first].get<bool>()});return result;}
 [[maybe_unused]] static void set_categories_changed(void(*callback)()){categories_changed=callback;}
 [[maybe_unused]] static void set_open_category(int(*callback)(const char*)){open_category=callback;}
-static void update_scroll(Pane &p){RECT r{};GetClientRect(p.window,&r);SCROLLINFO info{sizeof(info),SIF_RANGE|SIF_PAGE|SIF_POS,0,std::max(0,p.content_height-1),(UINT)std::max(0L,r.bottom),p.scroll,0};SetScrollInfo(p.window,SB_VERT,&info,TRUE);}
-static int px(const Pane &p,int value){return MulDiv(value,(int)p.dpi,96);}
-static UINT window_dpi(HWND window){using Fn=UINT(WINAPI*)(HWND);static auto fn=reinterpret_cast<Fn>(GetProcAddress(GetModuleHandleW(L"user32.dll"),"GetDpiForWindow"));UINT dpi=fn?fn(window):96;return dpi?dpi:96;}
-static HFONT make_font(UINT dpi){return CreateFontW(-MulDiv(12,(int)dpi,72),0,0,0,FW_NORMAL,FALSE,FALSE,FALSE,DEFAULT_CHARSET,OUT_DEFAULT_PRECIS,CLIP_DEFAULT_PRECIS,CLEARTYPE_QUALITY,DEFAULT_PITCH,L"Segoe UI");}
-static HWND add(Pane &p,const wchar_t *cls,const std::wstring &value,DWORD style,int x,int y,int w,int h,int id){HWND c=CreateWindowExW(0,cls,value.c_str(),WS_CHILD|WS_VISIBLE|style,x,y,w,h,p.window,(HMENU)(INT_PTR)id,GetModuleHandleW(nullptr),nullptr);if(c&&p.font)SendMessageW(c,WM_SETFONT,(WPARAM)p.font,TRUE);return c;}
-static int label_height(Pane &p,const std::wstring &value,int width){HDC dc=GetDC(p.window);if(!dc)return px(p,25);HGDIOBJ old=p.font?SelectObject(dc,p.font):nullptr;RECT rect{0,0,width,0};DrawTextW(dc,value.c_str(),(int)value.size(),&rect,DT_CALCRECT|DT_WORDBREAK|DT_EDITCONTROL|DT_NOPREFIX);if(old)SelectObject(dc,old);ReleaseDC(p.window,dc);return std::max((long)px(p,25),rect.bottom-rect.top);}
-static void refresh(Pane &p){
- if(!p.window||!IsWindow(p.window))return;HWND focused=GetFocus();Control focusedControl{};bool restoreFocus=false,restoreText=false;std::wstring pendingText;DWORD selectionStart=0,selectionEnd=0;if(focused&&GetParent(focused)==p.window){auto it=p.controls.find(GetDlgCtrlID(focused));if(it!=p.controls.end()){focusedControl=it->second;restoreFocus=true;restoreText=focusedControl.type=="text"||focusedControl.type=="integer";if(restoreText){int length=GetWindowTextLengthW(focused);pendingText.resize((size_t)length+1);GetWindowTextW(focused,pendingText.data(),length+1);pendingText.resize((size_t)length);SendMessageW(focused,EM_GETSEL,(WPARAM)&selectionStart,(LPARAM)&selectionEnd);}}}p.rebuilding=true;while(HWND child=GetWindow(p.window,GW_CHILD))DestroyWindow(child);p.controls.clear();RECT bounds{};GetClientRect(p.window,&bounds);int width=std::max((long)px(p,40),bounds.right-px(p,28)),y=px(p,10),id=100;
- auto heading=[&](const std::string &value){auto content=wide(value);int height=label_height(p,content,width);add(p,L"STATIC",content,SS_NOPREFIX,px(p,14),y,width,height,id++);y+=height+px(p,4);};
- if(p.id.empty()){heading("Extend");for(const auto &entry:plugins){heading(entry.second.descriptor["name"].get<std::string>());int show=id++;p.controls[show]={entry.first,"","visible"};auto check=add(p,L"BUTTON",L"显示右侧面板入口",BS_OWNERDRAW,px(p,14),y,width,px(p,24),show);SetPropW(check,L"SV2Extend.Checked",(!visibility.contains(entry.first)||visibility[entry.first].get<bool>())?(HANDLE)1:nullptr);y+=px(p,27);int n=id++;p.controls[n]={entry.first,"","open"};add(p,L"BUTTON",L"打开插件面板",BS_OWNERDRAW,px(p,14),y,width,px(p,25),n);y+=px(p,38);}}
- else {auto it=plugins.find(p.id);if(it!=plugins.end()){auto &v=it->second;heading(v.descriptor["sidebar"]["title"].get<std::string>());heading(v.descriptor["status"].get<std::string>());
- for(const auto &row:v.descriptor["sidebar"]["rows"]){int n=id++;auto type=row["type"].get<std::string>();auto value=wide(row["text"].get<std::string>());if(type=="button")p.controls[n]={it->first,row["id"].get<std::string>(),"action"};int height=type=="button"?px(p,25):label_height(p,value,width);add(p,type=="button"?L"BUTTON":L"STATIC",value,type=="button"?BS_OWNERDRAW:SS_NOPREFIX,px(p,14),y,width,height,n);y+=height+px(p,4);}
- for(const auto &field:v.descriptor["settings"]){auto key=field["key"].get<std::string>(),type=field["type"].get<std::string>();int n=id++;p.controls[n]={it->first,key,type};auto title=wide(field["title"].get<std::string>());if(type=="boolean"){auto c=add(p,L"BUTTON",title,BS_OWNERDRAW,px(p,14),y,width,px(p,24),n);SetPropW(c,L"SV2Extend.Checked",v.values[key].get<bool>()?(HANDLE)1:nullptr);y+=px(p,27);}else{add(p,L"STATIC",title,0,px(p,14),y,width,px(p,20),id++);y+=px(p,21);if(type=="choice"){auto c=add(p,L"COMBOBOX",L"",CBS_DROPDOWNLIST|CBS_OWNERDRAWFIXED|CBS_HASSTRINGS|WS_VSCROLL,px(p,14),y,width,px(p,200),n);SendMessageW(c,CB_SETITEMHEIGHT,(WPARAM)-1,px(p,24));SendMessageW(c,CB_SETITEMHEIGHT,0,px(p,24));int i=0,selected=0;for(const auto &choice:field["choices"]){auto w=wide(choice.get<std::string>());SendMessageW(c,CB_ADDSTRING,0,(LPARAM)w.c_str());if(choice==v.values[key])selected=i;++i;}SendMessageW(c,CB_SETCURSEL,selected,0);}else{auto text=type=="text"?v.values[key].get<std::string>():v.values[key].dump();add(p,L"EDIT",wide(text),WS_BORDER|ES_AUTOHSCROLL,px(p,14),y,width,px(p,24),n);}y+=px(p,29);}}
- }}p.content_height=y+px(p,8);p.scroll=std::max(0,std::min(p.scroll,std::max(0,p.content_height-(int)bounds.bottom)));if(p.scroll)ScrollWindowEx(p.window,0,-p.scroll,nullptr,nullptr,nullptr,nullptr,SW_SCROLLCHILDREN|SW_INVALIDATE);update_scroll(p);if(restoreFocus)for(const auto &entry:p.controls){const auto &control=entry.second;if(control.plugin==focusedControl.plugin&&control.key==focusedControl.key&&control.type==focusedControl.type){HWND target=GetDlgItem(p.window,entry.first);if(restoreText){SetWindowTextW(target,pendingText.c_str());SendMessageW(target,EM_SETSEL,selectionStart,selectionEnd);}SetFocus(target);break;}}p.rebuilding=false;
+
+static bool owned(void *pane){if(panes.count(pane))return true;for(auto &item:panes)if(item.second.content.object==pane)return true;return false;}
+static bool owns_child(void *pane,void *child){auto found=panes.find(pane);if(found==panes.end())return false;return found->second.viewport.object==child;}
+static void enqueue(void *context){auto control=static_cast<Control*>(context);if(control->pending<1024)++control->pending;if(dispatcher)PostMessageW(dispatcher,WM_APP+2,0,0);}
+static bool create(Pane &pane,Control &c,const json &field){
+ const auto &caption=c.caption;bool ok=false;
+ if(c.type=="label")ok=c.label.create(pane.content.object,owned,thread_id,c.key.c_str(),caption.c_str());
+ else if(c.type=="boolean"||c.type=="visible")ok=c.toggle.create(pane.content.object,owned,thread_id,caption.c_str(),enqueue,&c)&&native_widget_listener::set_toggle(c.toggle.listener,c.value.get<bool>());
+ else if(c.type=="choice"){
+  std::vector<std::string> storage;std::vector<const char*> items;for(auto &item:field["choices"])storage.push_back(item.get<std::string>());for(auto &item:storage)items.push_back(item.c_str());
+  int selected=-1;for(size_t i=0;i<storage.size();++i)if(storage[i]==c.value.get<std::string>())selected=(int)i;
+  ok=c.choice.create(pane.content.object,owned,thread_id,caption.c_str(),items.data(),(int)items.size())&&c.choice.set(selected);
+ }else if(c.type=="text"||c.type=="integer"){
+  auto value=c.type=="text"?c.value.get<std::string>():c.value.dump();c.observed=value;ok=c.textbox.create(pane.content.object,owned,thread_id,value.c_str());
+ }else ok=c.button.create(pane.content.object,owned,thread_id,caption.c_str(),enqueue,&c);
+ if(!ok)c.destroy();return ok;
 }
-static bool set_dpi(Pane &p,UINT dpi){if(!dpi||(dpi==p.dpi&&p.font))return true;HFONT next=make_font(dpi);if(!next)return false;HFONT old=p.font;UINT previous=p.dpi;p.dpi=dpi;p.font=next;p.scroll=MulDiv(p.scroll,(int)dpi,(int)previous);refresh(p);if(old)DeleteObject(old);return true;}
-static void refresh_plugin(const std::string &id,bool center){for(auto &it:panes)if(it.second.id==id||(center&&it.second.id.empty()))refresh(it.second);}
-static LRESULT CALLBACK panel_proc(HWND w,UINT msg,WPARAM wp,LPARAM lp){
- auto p=reinterpret_cast<Pane*>(GetWindowLongPtrW(w,GWLP_USERDATA));if(msg==WM_NCCREATE){p=reinterpret_cast<Pane*>(reinterpret_cast<CREATESTRUCTW*>(lp)->lpCreateParams);SetWindowLongPtrW(w,GWLP_USERDATA,(LONG_PTR)p);}if(!p)return DefWindowProcW(w,msg,wp,lp);
- if(msg==WM_SIZE){refresh(*p);return 0;}if(msg==0x02E3){set_dpi(*p,window_dpi(w));return 0;}if(msg==WM_CTLCOLORSTATIC||msg==WM_CTLCOLOREDIT||msg==WM_CTLCOLORLISTBOX){SetTextColor((HDC)wp,RGB(199,199,199));SetBkColor((HDC)wp,msg==WM_CTLCOLORSTATIC?RGB(45,43,45):RGB(58,58,58));return (LRESULT)(msg==WM_CTLCOLORSTATIC?background:field_background);}if(msg==WM_ERASEBKGND){RECT r{};GetClientRect(w,&r);FillRect((HDC)wp,&r,background);return 1;}
- if(msg==WM_DRAWITEM){auto d=reinterpret_cast<DRAWITEMSTRUCT*>(lp);auto it=p->controls.find((int)d->CtlID);if(it==p->controls.end())return FALSE;RECT r=d->rcItem;bool checkbox=it->second.type=="boolean"||it->second.type=="visible";bool checked=checkbox&&GetPropW(d->hwndItem,L"SV2Extend.Checked");HBRUSH fill=CreateSolidBrush(checkbox?RGB(45,43,45):RGB(58,58,58));FillRect(d->hDC,&r,fill);DeleteObject(fill);if(checkbox){RECT box{r.left+px(*p,1),r.top+px(*p,5),r.left+px(*p,13),r.top+px(*p,17)};fill=CreateSolidBrush(checked?RGB(150,199,102):RGB(58,58,58));FillRect(d->hDC,&box,fill);DeleteObject(fill);if(checked){HPEN pen=CreatePen(PS_SOLID,px(*p,1),RGB(33,33,33));auto old=SelectObject(d->hDC,pen);MoveToEx(d->hDC,box.left+px(*p,2),box.top+px(*p,6),nullptr);LineTo(d->hDC,box.left+px(*p,5),box.top+px(*p,9));LineTo(d->hDC,box.left+px(*p,10),box.top+px(*p,3));SelectObject(d->hDC,old);DeleteObject(pen);}r.left+=px(*p,20);}SetBkMode(d->hDC,TRANSPARENT);SetTextColor(d->hDC,RGB(199,199,199));wchar_t text[1024]{};if(it->second.type=="choice"&&d->itemID!=(UINT)-1){auto length=SendMessageW(d->hwndItem,CB_GETLBTEXTLEN,d->itemID,0);if(length>=0&&length<1024)SendMessageW(d->hwndItem,CB_GETLBTEXT,d->itemID,(LPARAM)text);}else GetWindowTextW(d->hwndItem,text,1024);HGDIOBJ oldFont=p->font?SelectObject(d->hDC,p->font):nullptr;DrawTextW(d->hDC,text,-1,&r,(checkbox?DT_LEFT:DT_CENTER)|DT_VCENTER|DT_SINGLELINE|DT_END_ELLIPSIS);if(oldFont)SelectObject(d->hDC,oldFont);return TRUE;}
- if(msg==WM_VSCROLL||msg==WM_MOUSEWHEEL){SCROLLINFO info{sizeof(info),SIF_ALL,0,0,0,0,0};GetScrollInfo(w,SB_VERT,&info);int next=p->scroll;if(msg==WM_MOUSEWHEEL)next-=GET_WHEEL_DELTA_WPARAM(wp)/WHEEL_DELTA*px(*p,48);else switch(LOWORD(wp)){case SB_LINEUP:next-=px(*p,24);break;case SB_LINEDOWN:next+=px(*p,24);break;case SB_PAGEUP:next-=(int)info.nPage;break;case SB_PAGEDOWN:next+=(int)info.nPage;break;case SB_THUMBTRACK:next=info.nTrackPos;break;default:return 0;}next=std::max(0,std::min(next,std::max(0,info.nMax-(int)info.nPage+1)));int delta=p->scroll-next;p->scroll=next;ScrollWindowEx(w,0,delta,nullptr,nullptr,nullptr,nullptr,SW_SCROLLCHILDREN|SW_INVALIDATE);update_scroll(*p);return 0;}
- if(msg==WM_COMMAND&&!p->rebuilding){auto c=p->controls.find(LOWORD(wp));if(c==p->controls.end())return 0;auto control=c->second;auto it=plugins.find(control.plugin);if(it==plugins.end())return 0;if(control.type=="action"&&HIWORD(wp)==BN_CLICKED){notify(control.plugin,json{{"kind","action"},{"action",control.key}});return 0;}if(control.type=="visible"&&HIWORD(wp)==BN_CLICKED){auto next=visibility;next[control.plugin]=!(!visibility.contains(control.plugin)||visibility[control.plugin].get<bool>());if(save_state(preferences,next)){if(categories_changed)categories_changed();refresh_plugin(control.plugin,true);}return 0;}if(control.type=="open"&&HIWORD(wp)==BN_CLICKED){if(open_category)open_category(control.plugin.c_str());return 0;}HWND input=(HWND)lp;json value;bool changed=false;
- if(control.type=="boolean"&&HIWORD(wp)==BN_CLICKED){value=!it->second.values[control.key].get<bool>();changed=true;}if(control.type=="choice"&&HIWORD(wp)==CBN_SELCHANGE){int n=(int)SendMessageW(input,CB_GETCURSEL,0,0);for(const auto &f:it->second.descriptor["settings"])if(f["key"]==control.key&&n>=0&&(size_t)n<f["choices"].size()){value=f["choices"][n];changed=true;}}
- if((control.type=="text"||control.type=="integer")&&HIWORD(wp)==EN_KILLFOCUS){int n=GetWindowTextLengthW(input);std::wstring text((size_t)n+1,L'\0');GetWindowTextW(input,text.data(),n+1);text.resize((size_t)n);auto raw=utf8(text);if(control.type=="text"){value=raw;changed=true;}else try{size_t used=0;auto number=std::stoll(raw,&used);if(used==raw.size()){value=number;changed=true;}}catch(...){}}
- if(changed)for(const auto &f:it->second.descriptor["settings"])if(f["key"]==control.key&&field_value(f,value)){auto values=it->second.values;values[control.key]=value;if(save_values(control.plugin,values)){it->second.values=values;if(control.type=="boolean"){SetPropW(input,L"SV2Extend.Checked",value.get<bool>()?(HANDLE)1:nullptr);InvalidateRect(input,nullptr,TRUE);}notify(control.plugin,json{{"kind","settings"},{"settings",values}});}else refresh(*p);break;}return 0;}
- return DefWindowProcW(w,msg,wp,lp);
+static bool reconcile(Pane &pane){
+ std::set<std::string> wanted;std::vector<std::string> order;bool ok=true;
+ auto add=[&](const std::string &identity,const std::string &plugin,const std::string &key,const std::string &type,const std::string &caption,const json &value,const json &field=json::object()){
+  wanted.insert(identity);order.push_back(identity);auto found=pane.controls.find(identity);
+  if(found==pane.controls.end()){
+   auto control=std::make_unique<Control>();control->plugin=plugin;control->key=key;control->type=type;control->caption=caption;control->value=value;
+   auto raw=control.get();pane.controls.emplace(identity,std::move(control));if(!create(pane,*raw,field)){ok=false;if(raw->destroy())pane.controls.erase(identity);}
+  }else {auto &control=*found->second;
+   if(control.caption!=caption){bool changed=type=="label"?control.label.update(caption.c_str()):(type=="boolean"||type=="visible")?control.toggle.set_caption(caption.c_str()):control.button.set_caption(caption.c_str());if(changed){control.caption=caption;control.measured_width=-1;}else ok=false;}
+  }
+ };
+ if(pane.id.empty()){
+  for(const auto &item:plugins){auto &id=item.first;auto &plugin=item.second;add(id+"/title",id,"title","label",plugin.descriptor["name"],json());bool visible=!visibility.contains(id)||visibility[id].get<bool>();add(id+"/visible",id,"visible","visible",u8"\u663e\u793a\u53f3\u4fa7\u9762\u677f\u5165\u53e3",visible);add(id+"/open",id,"open","open",u8"\u6253\u5f00\u63d2\u4ef6\u9762\u677f",json());}
+ }else {
+  auto found=plugins.find(pane.id);if(found!=plugins.end()){auto &plugin=found->second;
+   add("title",pane.id,"title","label",plugin.descriptor["sidebar"]["title"],json());add("status",pane.id,"status","label",plugin.descriptor["status"],json());
+   size_t index=0;for(const auto &row:plugin.descriptor["sidebar"]["rows"]){auto type=row["type"].get<std::string>();auto key=type=="button"?row["id"].get<std::string>():std::to_string(index);add("row/"+type+"/"+key,pane.id,key,type=="button"?"action":"label",row["text"],json());++index;}
+   for(const auto &field:plugin.descriptor["settings"]){auto key=field["key"].get<std::string>(),type=field["type"].get<std::string>();if(type!="boolean")add("caption/"+key,pane.id,key,"label",field["title"],json());add("setting/"+key,pane.id,key,type,field["title"],plugin.values[key],field);}
+  }
+ }
+ for(auto it=pane.controls.begin();it!=pane.controls.end();){if(!wanted.count(it->first)){if(it->second->destroy())it=pane.controls.erase(it);else{ok=false;++it;}}else ++it;}
+ pane.order=std::move(order);pane.ready=ok;return ok;
 }
-static void diagnostic(){if(diagnostic_file.empty())return;json items=json::array();for(const auto &entry:panes){const auto &p=entry.second;RECT rect{};GetWindowRect(p.window,&rect);items.push_back({{"id",p.id},{"visible",IsWindowVisible(p.window)!=FALSE},{"width",rect.right-rect.left},{"height",rect.bottom-rect.top}});}auto body=json{{"processId",GetCurrentProcessId()},{"mainThreadId",thread_id},{"panes",items},{"categoryCount",plugins.size()}}.dump(2);if(body==last_diagnostic)return;std::error_code ec;std::filesystem::create_directories(diagnostic_file.parent_path(),ec);if(ec)return;auto temp=diagnostic_file;temp+=L".tmp-"+std::to_wstring(GetCurrentProcessId());HANDLE f=CreateFileW(temp.c_str(),GENERIC_WRITE,0,nullptr,CREATE_NEW,FILE_ATTRIBUTE_NORMAL,nullptr);if(f==INVALID_HANDLE_VALUE)return;DWORD written=0;bool ok=WriteFile(f,body.data(),(DWORD)body.size(),&written,nullptr)&&written==body.size();if(!CloseHandle(f))ok=false;if(ok)ok=MoveFileExW(temp.c_str(),diagnostic_file.c_str(),MOVEFILE_REPLACE_EXISTING|MOVEFILE_WRITE_THROUGH)!=FALSE;if(ok)last_diagnostic=body;else DeleteFileW(temp.c_str());}
-[[maybe_unused]] static bool dock_update(void *identity,const char *id,HWND host,const RECT &bounds,bool visible){
- if(GetCurrentThreadId()!=thread_id||!identity||!id||!host||!IsWindow(host)||bounds.right<bounds.left||bounds.bottom<bounds.top||(*id&&plugins.find(id)==plugins.end()))return false;
- DWORD pid=0;if(GetWindowThreadProcessId(host,&pid)!=thread_id||pid!=GetCurrentProcessId())return false;auto it=panes.find(identity);if(it!=panes.end()&&!IsWindow(it->second.window)){if(it->second.font)DeleteObject(it->second.font);panes.erase(it);it=panes.end();}if(it==panes.end()){WNDCLASSW cls{};cls.lpfnWndProc=panel_proc;cls.hInstance=GetModuleHandleW(nullptr);cls.lpszClassName=L"SV2ExtendNativePanel";if(!RegisterClassW(&cls)&&GetLastError()!=ERROR_CLASS_ALREADY_EXISTS)return false;auto inserted=panes.emplace(identity,Pane(identity,id));it=inserted.first;auto &p=it->second;if(!set_dpi(p,window_dpi(host))){panes.erase(it);return false;}p.window=CreateWindowExW(0,cls.lpszClassName,L"",WS_CHILD|WS_CLIPCHILDREN|WS_VSCROLL,0,0,0,0,host,nullptr,cls.hInstance,&p);if(!p.window){DeleteObject(p.font);panes.erase(it);return false;}}
- auto &p=it->second;if(p.id!=id||GetParent(p.window)!=host||!set_dpi(p,window_dpi(host)))return false;RECT current{};GetWindowRect(p.window,&current);MapWindowPoints(nullptr,host,reinterpret_cast<POINT*>(&current),2);if(!EqualRect(&current,&bounds))MoveWindow(p.window,bounds.left,bounds.top,bounds.right-bounds.left,bounds.bottom-bounds.top,TRUE);if((IsWindowVisible(p.window)!=FALSE)!=visible)ShowWindow(p.window,visible?SW_SHOW:SW_HIDE);diagnostic();return true;
+static bool measure_label(Control &control,int width){
+ if(control.measured_width==width)return true;
+ float measured=0,font_height=0;int horizontal=0,vertical=0;
+ if(!control.label.measure("M",measured,font_height,horizontal,vertical))return false;
+ float available=(float)std::max(1,width-horizontal);size_t paragraph=0;int lines=0;
+ while(true){
+  auto end=control.caption.find('\n',paragraph);if(end==std::string::npos)end=control.caption.size();
+  std::vector<size_t> boundaries{paragraph};for(size_t i=paragraph;i<end;){++i;while(i<end&&(static_cast<unsigned char>(control.caption[i])&0xc0)==0x80)++i;boundaries.push_back(i);}
+  size_t begin=0;if(boundaries.size()==1)++lines;
+  while(begin+1<boundaries.size()){
+   size_t low=begin+1,high=boundaries.size()-1,fitting=begin+1;
+   while(low<=high){size_t middle=low+(high-low)/2;auto part=control.caption.substr(boundaries[begin],boundaries[middle]-boundaries[begin]);float actual=0,unused_height=0;int hb=0,vb=0;if(!control.label.measure(part.c_str(),actual,unused_height,hb,vb))return false;if(actual<=available){fitting=middle;low=middle+1;}else{if(!middle)break;high=middle-1;}}
+   size_t next=fitting;if(fitting+1<boundaries.size())for(size_t i=fitting;i>begin+1;--i)if(control.caption[boundaries[i-1]]==' '||control.caption[boundaries[i-1]]=='\t'){next=i;break;}
+   begin=next;while(begin+1<boundaries.size()&&(control.caption[boundaries[begin]]==' '||control.caption[boundaries[begin]]=='\t'))++begin;++lines;
+  }
+  if(end==control.caption.size())break;paragraph=end+1;
+ }
+ control.label_height=std::max(26,(int)std::ceil(lines*font_height)+vertical+2);control.measured_width=width;return true;
 }
-[[maybe_unused]] static void dock_remove(void *identity){if(GetCurrentThreadId()!=thread_id)return;auto it=panes.find(identity);if(it==panes.end())return;if(IsWindow(it->second.window))DestroyWindow(it->second.window);if(it->second.font)DeleteObject(it->second.font);panes.erase(it);diagnostic();}
+static void layout(Pane &pane){
+ int viewport_width=pane.bounds.right-pane.bounds.left,viewport_height=pane.bounds.bottom-pane.bounds.top;
+ auto image=reinterpret_cast<unsigned char*>(GetModuleHandleW(nullptr));
+ if(!pane.viewport.object||!pane.content.object)return;
+ if(!pane.visible||viewport_width<=0||viewport_height<=0){reinterpret_cast<void(*)(void*,bool)>(image+0xc4e5b0)(pane.viewport.object,false);return;}
+ pane.viewport.layout(pane.bounds.left,pane.bounds.top,viewport_width,viewport_height);
+ int available=0;std::memcpy(&available,static_cast<unsigned char*>(pane.viewport.object)+0x150,sizeof available);
+ int width=available-24,y=10;
+ for(const auto &identity:pane.order){auto found=pane.controls.find(identity);if(found==pane.controls.end())continue;auto &control=*found->second;auto child=control.component();if(!child)continue;
+  if(control.type=="label"&&!measure_label(control,width)){pane.ready=false;continue;}int height=control.type=="label"?control.label_height:28;
+  if(pane.visible&&width>0){control.layout(12,y,width,height);}else reinterpret_cast<void(*)(void*,bool)>(image+0xc4e5b0)(child,false);
+  y+=height+6;
+ }
+ int x=0,top=0;std::memcpy(&x,static_cast<unsigned char*>(pane.content.object)+0x38,sizeof x);std::memcpy(&top,static_cast<unsigned char*>(pane.content.object)+0x3c,sizeof top);pane.content.layout(x,top,std::max(1,available),std::max(viewport_height,y+8));
+}
+static void refresh_plugin(const std::string &id,bool center){for(auto &item:panes)if(item.second.id==id||(center&&item.second.id.empty())){reconcile(item.second);layout(item.second);}}
+static void commit_value(const std::string &plugin,const std::string &key,const std::string &type,const json &value,bool restore){
+ for(auto &pane:panes)for(auto &item:pane.second.controls){auto &c=*item.second;if(c.plugin!=plugin||c.key!=key||c.type!=type)continue;
+  if(restore){if(type=="boolean"||type=="visible")native_widget_listener::set_toggle(c.toggle.listener,c.value.get<bool>());else if(type=="choice"){auto found=plugins.find(plugin);if(found!=plugins.end())for(auto &field:found->second.descriptor["settings"])if(field["key"]==key)for(size_t i=0;i<field["choices"].size();++i)if(field["choices"][i]==c.value)c.choice.set((int)i);}else if(type=="text"||type=="integer"){auto text=type=="text"?c.value.get<std::string>():c.value.dump();c.textbox.set_text(text.c_str());c.observed=text;c.edited_at=0;}}
+  else c.value=value;
+ }
+}
+static void drain(){
+ if(GetCurrentThreadId()!=thread_id)return;
+ struct Event {std::string plugin,key,type;json value;};std::vector<Event> events;auto now=GetTickCount64();
+ for(auto &pane:panes)for(auto &item:pane.second.controls){auto &control=*item.second;if(!control.component())continue;bool changed=false;json value;
+  if(control.type=="action"||control.type=="open"){while(control.pending){--control.pending;events.push_back({control.plugin,control.key,control.type,json()});}continue;}
+  if(control.type=="boolean"||control.type=="visible"){if(control.pending){control.pending=0;bool checked=false;if(native_widget_listener::get_toggle(control.toggle.listener,checked)){value=checked;changed=value!=control.value;}}}
+  else if(control.type=="choice"){int selected=-1;if(control.choice.get(selected)&&selected>=0){auto plugin=plugins.find(control.plugin);if(plugin!=plugins.end())for(const auto &field:plugin->second.descriptor["settings"])if(field["key"]==control.key&&selected<(int)field["choices"].size()){value=field["choices"][selected];changed=value!=control.value;break;}}}
+  else if(control.type=="text"||control.type=="integer"){
+   std::string current;if(control.textbox.get_text(current)){if(current!=control.observed){control.observed=current;control.edited_at=now;}if(control.edited_at&&now-control.edited_at>=500){control.edited_at=0;if(control.type=="text"){value=current;changed=value!=control.value;}else try{size_t used=0;auto number=std::stoll(current,&used);if(used==current.size()){value=number;changed=value!=control.value;}}catch(...){}}}
+  }
+  if(changed){events.push_back({control.plugin,control.key,control.type,value});}
+ }
+ for(auto &event:events){auto found=plugins.find(event.plugin);if(found==plugins.end())continue;
+  if(event.type=="action"){notify(event.plugin,{{"kind","action"},{"action",event.key}});continue;}
+  if(event.type=="open"){if(open_category)open_category(event.plugin.c_str());continue;}
+  if(event.type=="visible"){auto next=visibility;next[event.plugin]=event.value;if(save_state(preferences,next)){commit_value(event.plugin,event.key,event.type,event.value,false);if(categories_changed)categories_changed();refresh_plugin(event.plugin,true);}else commit_value(event.plugin,event.key,event.type,event.value,true);continue;}
+  for(const auto &field:found->second.descriptor["settings"])if(field["key"]==event.key&&field_value(field,event.value)){auto values=found->second.values;values[event.key]=event.value;if(save_values(event.plugin,values)){found->second.values=values;commit_value(event.plugin,event.key,event.type,event.value,false);notify(event.plugin,{{"kind","settings"},{"settings",values}});}else commit_value(event.plugin,event.key,event.type,event.value,true);break;}
+ }
+}
+static void diagnostic(){
+ if(diagnostic_file.empty())return;json items=json::array();for(const auto &item:panes){const auto &pane=item.second;items.push_back({{"id",pane.id},{"visible",pane.visible},{"ready",pane.ready},{"width",pane.bounds.right-pane.bounds.left},{"height",pane.bounds.bottom-pane.bounds.top},{"nativeControls",pane.controls.size()}});}
+ auto body=json{{"processId",GetCurrentProcessId()},{"mainThreadId",thread_id},{"renderer","sv-components"},{"foreignContentWindows",0},{"panes",items},{"categoryCount",plugins.size()}}.dump(2);if(body==last_diagnostic)return;std::error_code ec;std::filesystem::create_directories(diagnostic_file.parent_path(),ec);if(ec)return;auto temp=diagnostic_file;temp+=L".tmp-"+std::to_wstring(GetCurrentProcessId());HANDLE file=CreateFileW(temp.c_str(),GENERIC_WRITE,0,nullptr,CREATE_NEW,FILE_ATTRIBUTE_NORMAL,nullptr);if(file==INVALID_HANDLE_VALUE)return;DWORD written=0;bool ok=WriteFile(file,body.data(),(DWORD)body.size(),&written,nullptr)&&written==body.size();if(!CloseHandle(file))ok=false;if(ok)ok=MoveFileExW(temp.c_str(),diagnostic_file.c_str(),MOVEFILE_REPLACE_EXISTING|MOVEFILE_WRITE_THROUGH)!=FALSE;if(ok)last_diagnostic=body;else DeleteFileW(temp.c_str());
+}
+[[maybe_unused]] static bool dock_update(void *identity,const char *id,HWND window,const RECT &bounds,bool visible){
+ if(GetCurrentThreadId()!=thread_id||!identity||!id||!window||!IsWindow(window)||bounds.right<bounds.left||bounds.bottom<bounds.top||(*id&&!plugins.count(id)))return false;
+ DWORD pid=0;if(GetWindowThreadProcessId(window,&pid)!=thread_id||pid!=GetCurrentProcessId())return false;host=window;
+ auto found=panes.find(identity);if(found==panes.end()){found=panes.try_emplace(identity,identity,id).first;found->second.window=window;auto &created=found->second;if(!created.viewport.create(identity,owned,thread_id)||!created.content.create(thread_id)||!created.viewport.set_content(created.content.object,false)||!reconcile(created)){bool clean=true;for(auto &item:created.controls)if(!item.second->destroy())clean=false;if(clean&&created.viewport.destroy()&&created.content.destroy())panes.erase(found);return false;}}
+ auto &pane=found->second;if(pane.id!=id||pane.window!=window)return false;pane.bounds=bounds;pane.visible=visible;layout(pane);diagnostic();return pane.ready;
+}
+[[maybe_unused]] static void dock_remove(void *identity){if(GetCurrentThreadId()!=thread_id)return;auto found=panes.find(identity);if(found==panes.end())return;bool ok=true;for(auto &item:found->second.controls)if(!item.second->destroy())ok=false;if(ok)ok=found->second.viewport.destroy()&&found->second.content.destroy();if(ok)panes.erase(found);diagnostic();}
 static BOOL CALLBACK find_host(HWND w,LPARAM result){if(!IsWindowVisible(w)||GetWindow(w,GW_OWNER)||(GetWindowLongPtrW(w,GWL_EXSTYLE)&WS_EX_TOOLWINDOW))return TRUE;wchar_t name[256]{};if(!GetClassNameW(w,name,256)||wcsncmp(name,L"JUCE_",5)!=0)return TRUE;auto style=GetWindowLongPtrW(w,GWL_STYLE);RECT rect{};GetClientRect(w,&rect);if(!(style&WS_THICKFRAME)||!(style&WS_SYSMENU)||rect.right<400||rect.bottom<300)return TRUE;*reinterpret_cast<HWND*>(result)=w;return FALSE;}
-static void CALLBACK timer(HWND,UINT,UINT_PTR,DWORD){if(host&&!IsWindow(host))host=nullptr;if(!host)EnumThreadWindows(thread_id,find_host,(LPARAM)&host);}
-static int install(HWND window,const wchar_t *profile_root){if(!window||!profile_root||!*profile_root)return LOADER_ERR_INVALID;dispatcher=window;thread_id=GetCurrentThreadId();diagnostic_file=std::filesystem::path(profile_root)/L"outputs"/L"windows-panel.json";background=CreateSolidBrush(RGB(45,43,45));field_background=CreateSolidBrush(RGB(58,58,58));std::filesystem::path dir=std::filesystem::path(profile_root)/L"preferences";std::error_code ec;std::filesystem::create_directories(dir,ec);preference_file=dir/L"windows-plugin-ui.json";
+static int install(HWND window,const wchar_t *profile_root){if(!window||!profile_root||!*profile_root)return LOADER_ERR_INVALID;dispatcher=window;thread_id=GetCurrentThreadId();diagnostic_file=std::filesystem::path(profile_root)/L"outputs"/L"windows-panel.json";std::filesystem::path dir=std::filesystem::path(profile_root)/L"preferences";std::error_code ec;std::filesystem::create_directories(dir,ec);preference_file=dir/L"windows-plugin-ui.json";
  if(!ec){DWORD attr=GetFileAttributesW(preference_file.c_str());if(attr!=INVALID_FILE_ATTRIBUTES&&(attr&(FILE_ATTRIBUTE_REPARSE_POINT|FILE_ATTRIBUTE_DIRECTORY)))return LOADER_ERR_INVALID;auto size=std::filesystem::file_size(preference_file,ec);if(ec==std::errc::no_such_file_or_directory){ec.clear();preferences_writable=true;}else if(!ec&&size<=262144){std::ifstream input(preference_file,std::ios::binary);json saved=json::parse(input,nullptr,false);if(saved.is_object()&&saved.contains("schema")&&saved["schema"].is_number_integer()&&saved["schema"]==1&&saved.contains("plugins")&&saved["plugins"].is_object()&&saved["plugins"].size()<=128){preference_document=saved;preferences=saved["plugins"];if(saved.contains("categoryVisibility")){if(!saved["categoryVisibility"].is_object())return LOADER_ERR_INVALID;for(auto it=saved["categoryVisibility"].begin();it!=saved["categoryVisibility"].end();++it)if(!it.value().is_boolean())return LOADER_ERR_INVALID;visibility=saved["categoryVisibility"]; }preferences_writable=true;}}}
- return background&&field_background&&SetTimer(dispatcher,0x53563255,500,timer)?LOADER_OK:LOADER_ERR_INVALID;}
+ return LOADER_OK;}
 static int register_ui(const char *raw,loader_plugin_ui_event event,void *owner){if(GetCurrentThreadId()!=thread_id)return LOADER_ERR_INVALID;json d=parse(raw);if(!valid(d)||plugins.size()>=32)return LOADER_ERR_INVALID;std::string id=d["id"];if(plugins.count(id))return LOADER_ERR_INVALID;json values=json::object();for(auto &f:d["settings"]){std::string key=f["key"];json value=f["default"];if(preferences.contains(id)&&preferences[id].is_object()&&preferences[id].contains(key)&&field_value(f,preferences[id][key]))value=preferences[id][key];values[key]=value;}plugins.emplace(id,Plugin{d,values,event,owner});refresh_plugin(id,true);if(categories_changed)categories_changed();notify(id,json{{"kind","settings"},{"settings",values}});return LOADER_OK;}
 static int unregister_ui(const char *raw,void *owner){if(GetCurrentThreadId()!=thread_id||!raw)return LOADER_ERR_INVALID;auto it=plugins.find(raw);if(it==plugins.end()||it->second.owner!=owner)return LOADER_ERR_INVALID;std::string id=it->first;plugins.erase(it);refresh_plugin(id,true);if(categories_changed)categories_changed();return LOADER_OK;}
 static int update_ui(const char *raw,const char *body,void *owner){if(GetCurrentThreadId()!=thread_id||!raw)return LOADER_ERR_INVALID;auto it=plugins.find(raw);json state=parse(body);if(it==plugins.end()||it->second.owner!=owner||!state.is_object())return LOADER_ERR_INVALID;json next=it->second.descriptor;for(auto i=state.begin();i!=state.end();++i){if(i.key()!="status"&&i.key()!="sidebar")return LOADER_ERR_INVALID;next[i.key()]=i.value();}if(!valid(next))return LOADER_ERR_INVALID;if(next==it->second.descriptor)return LOADER_OK;it->second.descriptor=next;refresh_plugin(raw,false);return LOADER_OK;}
