@@ -1,89 +1,47 @@
-import json, socket, threading, select, subprocess, os, tempfile, queue, time, pathlib, sys
-listener=socket.socket();listener.bind(('127.0.0.1',0));listener.listen(); port=listener.getsockname()[1]
-lock=threading.Lock(); clients=set(); blocked=False; accepted=0
-def readn(s,n):
- b=b''
- while len(b)<n:
-  x=s.recv(n-len(b))
-  if not x: raise OSError('eof')
-  b+=x
- return b
-def serve(c):
- global accepted
- remote=None
- try:
-  c.settimeout(8); h=readn(c,2); methods=readn(c,h[1]); assert h[0]==5 and 0 in methods; c.sendall(b'\x05\x00')
-  h=readn(c,4); assert h[:3]==b'\x05\x01\x00'
-  if h[3]==1: host=socket.inet_ntop(socket.AF_INET,readn(c,4))
-  elif h[3]==4: host=socket.inet_ntop(socket.AF_INET6,readn(c,16))
-  elif h[3]==3: host=readn(c,readn(c,1)[0]).decode('idna')
-  else: raise OSError('bad address')
-  port=int.from_bytes(readn(c,2),'big')
-  with lock:
-   if blocked: raise OSError('offline')
-  remote=socket.create_connection((host,port),timeout=5)
-  with lock:
-   if blocked: raise OSError('offline')
-   clients.add(remote); accepted+=1
-  c.sendall(b'\x05\x00\x00\x01\x00\x00\x00\x00\x00\x00');c.settimeout(None);remote.settimeout(None)
-  while True:
-   r,_,_=select.select([c,remote],[],[],1)
-   with lock:
-    if blocked: break
-   for s in r:
-    b=s.recv(16384)
-    if not b: return
-    (remote if s is c else c).sendall(b)
- except (OSError,AssertionError,UnicodeError): pass
- finally:
-  with lock:
-   clients.discard(c)
-   if remote: clients.discard(remote)
-  c.close()
-  if remote: remote.close()
-def accept():
- while True:
-  try: c,_=listener.accept()
-  except OSError: return
-  with lock: clients.add(c)
-  threading.Thread(target=serve,args=(c,),daemon=True).start()
-threading.Thread(target=accept,daemon=True).start()
-env=os.environ.copy(); env['WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS']=f'--proxy-server=socks5://127.0.0.1:{port} --proxy-bypass-list=<-loopback> --disable-quic --force-webrtc-ip-handling-policy=disable_non_proxied_udp'
-if len(sys.argv) != 3: raise SystemExit('usage: python windows_webview_transport_probe.py FIXTURE_EXE SYSTEM_RUNTIME_DLL')
-root=pathlib.Path(tempfile.mkdtemp(prefix='webview-proxy-fixture-')); binary=pathlib.Path(sys.argv[1]);dll=sys.argv[2]
-results={}
-profile=root/'profile'/'EBWebView'/'Default';profile.mkdir(parents=True)
-(profile/'Preferences').write_text(json.dumps({'webrtc':{'ip_handling_policy':'disable_non_proxied_udp'}}),encoding='utf8')
-p=subprocess.Popen([str(binary),dll,str(root/'profile'),str(root/'preview.png'),'interactive'],stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=subprocess.STDOUT,text=True,encoding='utf8',errors='replace',env=env,bufsize=1)
-q=queue.Queue()
-def reader():
- for line in p.stdout: q.put(line.rstrip())
- q.put(None)
-threading.Thread(target=reader,daemon=True).start()
+import json
+import os
+from pathlib import Path
+import queue
+import subprocess
+import sys
+import tempfile
+import threading
+
+if len(sys.argv) != 3:
+    raise SystemExit('usage: probe.py FIXTURE_EXE SYSTEM_RUNTIME_DLL')
+root = Path(tempfile.mkdtemp(prefix='webview-transport-fixture-'))
+profile = root / 'profile' / 'EBWebView' / 'Default'
+profile.mkdir(parents=True)
+(profile / 'Preferences').write_text(json.dumps({'fixture': {'preserved': True}, 'webrtc': {'other': 'preserved'}}), encoding='utf8')
+process = subprocess.Popen([sys.argv[1], sys.argv[2], str(root / 'profile'), str(root / 'preview.png'), 'interactive'], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, encoding='utf8', errors='replace', bufsize=1)
+lines = queue.Queue()
+def read():
+    for line in process.stdout:
+        lines.put(line.rstrip())
+    lines.put(None)
+threading.Thread(target=read, daemon=True).start()
+results = {}
 try:
- while True:
-  line=q.get(timeout=90)
-  if line is None: break
-  if line.startswith(('network_phase=','dom=','ready=','job_samples=')): print(line,flush=True)
-  if line.startswith('dom=1 '):
-   cmd="Get-CimInstance Win32_Process -Filter \"Name = 'msedgewebview2.exe'\" | Where-Object { $_.CommandLine -like '*webview-proxy-fixture-*' } | ForEach-Object { 'role=' + $(if ($_.CommandLine -match '--type=([^ ]+)') { $Matches[1] } else { 'browser' }) + ' proxy=' + ($_.CommandLine -match '--proxy-server=') + ' webrtc=' + ($_.CommandLine -match '--force-webrtc-ip-handling-policy=disable_non_proxied_udp') }"
-   print(subprocess.run(['powershell','-NoProfile','-Command',cmd],capture_output=True,text=True).stdout,flush=True)
-  if line.startswith('network_phase='):
-   phase=int(line.split(' ',1)[0].split('=')[1]);results[phase]=json.loads(json.loads(line.split('result=',1)[1]))
-  if line=='ready=2':
-   with lock:
-    blocked=True
-    for s in list(clients):
-     try: s.shutdown(socket.SHUT_RDWR)
-     except OSError: pass
-   print('proxy_offline accepted=',accepted,flush=True);p.stdin.write('\n');p.stdin.flush()
-  if line=='ready=3':
-   with lock: blocked=False
-   print('proxy_online accepted=',accepted,flush=True);p.stdin.write('\n');p.stdin.flush()
- p.wait(timeout=10);print('exit=',p.returncode,'total_tunnels=',accepted,flush=True)
- offline=results.get(2,{})
- if p.returncode or offline.get('srflx4') != 0 or offline.get('srflx6') != 0 or offline.get('http') != 'failed' or offline.get('workerNewWs') == 'echo':
-  raise SystemExit('FAIL: proxy does not enforce complete offline network isolation')
+    while True:
+        line = lines.get(timeout=90)
+        if line is None:
+            break
+        if line.startswith(('network_phase=', 'dom=', 'ready=', 'job_samples=')):
+            print(line, flush=True)
+        if line.startswith('network_phase='):
+            phase = int(line.split(' ', 1)[0].split('=')[1])
+            results[phase] = json.loads(json.loads(line.split('result=', 1)[1]))
+        if line in ('ready=2', 'ready=3'):
+            process.stdin.write('\n')
+            process.stdin.flush()
+    process.wait(timeout=10)
+    prefs = json.loads((profile / 'Preferences').read_text(encoding='utf8'))
+    online = lambda x: x.get('http') == 'success' and x.get('workerNewHttp') == 'success' and x.get('workerNewWs') == 'echo'
+    offline = results.get(2, {})
+    blocked = offline.get('http') == 'failed' and offline.get('http6') == 'failed' and offline.get('existingTcp') != 'echo' and offline.get('newTcp') != 'echo' and offline.get('workerExistingHttp') == 'failed' and offline.get('workerNewHttp') == 'failed' and offline.get('workerExistingWs') != 'echo' and offline.get('workerNewWs') != 'echo' and offline.get('srflx4') == 0 and offline.get('srflx6') == 0
+    if process.returncode or not online(results.get(1, {})) or not blocked or not online(results.get(3, {})) or prefs.get('fixture', {}).get('preserved') is not True or prefs.get('webrtc', {}).get('other') != 'preserved' or prefs.get('webrtc', {}).get('ip_handling_policy') != 'disable_non_proxied_udp':
+        raise SystemExit('FAIL: transport or preference verification failed')
+    print('PASS: transport state and preserved preferences', flush=True)
 finally:
- if p.poll() is None: p.kill()
- listener.close()
+    if process.poll() is None:
+        process.kill()
