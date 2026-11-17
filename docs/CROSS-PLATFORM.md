@@ -45,7 +45,7 @@ Windows 支持 `--host <official-synthv-studio.exe> <profile-directory>`。启�
 
 当前后端以离线模式运行，动态联网开发中。AppContainer 也限制对 profile 之外项目路径的访问。
 
-Windows MCP 服务驻留在 SV2 内。右侧工具栏接入宿主原生 Extend 分类及独立插件分类，面板内容由跟随宿主停靠区域的 Win32 控件渲染；插件使用相同的声明式 UI API，不直接使用宿主控件。官方 2.3.0 隔离宿主已验证分类打开和关闭，以及实际屏幕缩放 100%→150%→100% 时的面板与字体尺寸；重复提交相同插件状态时焦点和滚动位置保持。客户端使用 `Native/Sv2Mcp.exe --endpoint Profile/outputs/mcp-endpoint.json` 建立 stdio 连接；该程序只转发 MCP，无常驻管理逻辑。内部官方 Lua 后端自动启动，用户无需运行脚本或使用 Lua 面板。入口有官方 2.3.0 的版本与字节校验，后端未就绪时不公布工具。
+Windows MCP 服务驻留在 SV2 内。右侧工具栏接入宿主原生 Extend 分类及独立插件分类，面板内容由 SV 宿主组件渲染；插件通过声明式 UI API 提供内容。官方 2.3.0 隔离宿主已验证分类打开和关闭，以及实际屏幕缩放 100%→150%→100% 时的面板与字体尺寸；重复提交相同插件状态时焦点和滚动位置保持。客户端使用 `Native/Sv2Mcp.exe --endpoint Profile/outputs/mcp-endpoint.json` 建立 stdio 连接；该程序只转发 MCP，无常驻管理逻辑。内部官方 Lua 后端自动启动，用户无需运行脚本或使用 Lua 面板。入口有官方 2.3.0 的版本与字节校验，后端未就绪时不公布工具。
 
 Windows 插件设置和右侧入口显隐保存在 profile 的 `preferences/windows-plugin-ui.json`；macOS 使用 `preferences/extend-ui.json`。两平台保持同一 SDK 契约，各自渲染面板内容。
 
