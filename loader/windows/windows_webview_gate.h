@@ -88,10 +88,18 @@ inline bool options_supported(IUnknown *options){
  LPWSTR arguments=nullptr;auto table=*reinterpret_cast<void***>(public_options);HRESULT result=reinterpret_cast<HRESULT(WINAPI*)(IUnknown*,LPWSTR*)>(table[3])(public_options,&arguments);
  bool supported=SUCCEEDED(result)&&(!arguments||!conflicting_arguments(arguments));CoTaskMemFree(arguments);public_options->Release();return supported;
 }
+inline bool start_transport(){
+ if(windows_webview_transport::state().installed)return !configured_arguments.empty();
+ if(!windows_webview_transport::configuration_supported()||!windows_webview_transport::install())return false;
+ wchar_t previous[32768];DWORD count=GetEnvironmentVariableW(L"WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS",previous,32768);if(count>=32768)return false;
+ std::wstring arguments=count?std::wstring(previous,count):std::wstring();
+ arguments+=L" "+windows_webview_transport::arguments();if(!SetEnvironmentVariableW(L"WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS",arguments.c_str()))return false;
+ configured_arguments=arguments;return windows_webview_transport::setblocked(blocked.load());
+}
 inline HRESULT WINAPI factory(bool check,int type,PCWSTR folder,IUnknown *options,IUnknown *handler){
  if(!handler)return E_INVALIDARG;
  if(!blocked.load())online_seen.store(true);auto original=original_factory.load();if(!original)return E_UNEXPECTED;
- if(!options_supported(options)){coverage.store(false);++denied;return E_INVALIDARG;}
+ if(!options_supported(options)||!start_transport()){coverage.store(false);++denied;return E_INVALIDARG;}
  try{
   std::filesystem::path udf;
   if(folder&&*folder)udf=std::filesystem::absolute(folder).lexically_normal();
@@ -116,20 +124,14 @@ inline FARPROC WINAPI resolve(HMODULE module,LPCSTR name){
  return reinterpret_cast<FARPROC>(factory);
 }
 inline bool install(const std::filesystem::path &profile){
- if(installed)return true;if(!windows_webview_transport::configuration_supported())return false;managed_root=std::filesystem::absolute(profile).lexically_normal();owner=GetCurrentThreadId();if(!windows_webview_transport::install())return false;
- wchar_t override_path[32768];if(GetEnvironmentVariableW(L"WEBVIEW2_USER_DATA_FOLDER",override_path,32768))return false;
- wchar_t previous[32768];DWORD count=GetEnvironmentVariableW(L"WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS",previous,32768);if(count>=32768)return false;
- std::wstring arguments=count?std::wstring(previous,count):std::wstring();
- if(conflicting_arguments(arguments))return false;
- arguments+=L" "+windows_webview_transport::arguments();if(!SetEnvironmentVariableW(L"WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS",arguments.c_str()))return false;
- configured_arguments=arguments;
+ if(installed)return true;if(!windows_webview_transport::configuration_supported())return false;managed_root=std::filesystem::absolute(profile).lexically_normal();owner=GetCurrentThreadId();
  HMODULE kernel=GetModuleHandleW(L"kernel32.dll");if(!kernel)return false;
  auto address=reinterpret_cast<void*>(GetProcAddress(kernel,"GetProcAddress"));if(!address)return false;
  if(MH_CreateHook(address,reinterpret_cast<void*>(resolve),reinterpret_cast<void**>(&original_resolve))!=MH_OK)return false;
  if(MH_EnableHook(address)!=MH_OK){MH_RemoveHook(address);original_resolve=nullptr;return false;}installed=true;return true;
 }
 inline void setblocked(bool value){
- blocked.store(value);windows_webview_transport::setblocked(value);
+ blocked.store(value);if(windows_webview_transport::state().installed)windows_webview_transport::setblocked(value);
 }
 inline bool retire(){
  if(!installed||!blocked.load()||GetCurrentThreadId()!=owner)return false;
@@ -140,6 +142,7 @@ inline bool retire(){
 inline State state(){std::lock_guard<std::mutex> lock(lifecycle_mutex);return {installed,blocked.load(),original_factory.load()!=nullptr,online_seen.load(),denied.load(),pending_environment.load(),pending_controller.load(),static_cast<unsigned>(controllers.size()),coverage.load(),0};}
 inline bool covered(const State &value,bool earlyProof){
  auto transport=windows_webview_transport::state();
+ if(!transport.installed)return earlyProof&&value.installed&&value.blocked&&value.coverage&&!value.factoryBound&&!value.onlineFactorySeen&&!value.denied&&!value.pendingEnvironment&&!value.pendingController&&!value.controllers;
  wchar_t arguments[32768];DWORD size=GetEnvironmentVariableW(L"WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS",arguments,32768);if(!size||size>=32768||configured_arguments!=std::wstring(arguments,size))return false;
  if(!value.installed||!value.blocked||!value.coverage||value.pendingEnvironment||value.pendingController||!transport.installed||!transport.blocked||transport.pending||transport.active||!transport.coverage)return false;
  return value.factoryBound||(earlyProof&&!value.onlineFactorySeen&&!value.denied);
