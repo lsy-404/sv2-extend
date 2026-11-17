@@ -25,7 +25,7 @@
 
 `sdk/examples/hello_plugin.c` 是同一份 C 源码，已在 macOS 构建 arm64/x86_64 Mach-O，并交叉构建 Windows x64 PE。编译产物不等于 Windows 运行验证。
 
-公开 provider 的 MCP 工具名称必须使用 `svext_` 前缀，且引用该 provider 自己声明的方法。示例工具为 `svext_hello_greet`。使用 `sdk/examples/build_hello.py --platform macos-arm64 --platform macos-x86_64 --platform windows-x86_64 --out /absolute/path/hello.sv2ext` 生成单个多平台包。
+内置编辑器工具使用两平台一致的 `sv_` 名称。独立 provider 的 MCP 工具名称必须使用 `svext_` 前缀，且引用该 provider 自己声明的方法。示例工具为 `svext_hello_greet`。使用 `sdk/examples/build_hello.py --platform macos-arm64 --platform macos-x86_64 --platform windows-x86_64 --out /absolute/path/hello.sv2ext` 生成单个多平台包。
 
 ## 当前平台状态
 
@@ -35,8 +35,8 @@
 | 启动器拉起宿主并退出 | SV2 验证 | 官方 2.3.0 隔离副本实机验证 |
 | 宿主内 provider 注册/请求 | SV2 验证 | fixture 请求和正式宿主插件初始化验证 |
 | 动态原生右侧面板 | 2.3.0 arm64 验证 | 官方 2.3.0 隔离宿主验证分类、停靠、缩放及状态刷新 |
-| MCP、Lua、JS 原生宿主接入 | SV2 验证 | MCP 与内部官方 Lua 后端已验证；JS 未适配 |
-| 声库、pitch、导出后端 | SV2 验证 | 音符组、音符与 pitch 已验证；声库及导出未适配 |
+| MCP、Lua、JS 原生宿主接入 | SV2 验证 | 2.3.0 隔离宿主已验证 MCP、官方 Lua 与 JS 调用 |
+| 声库、pitch、导出后端 | SV2 验证 | 已验证音符组、pitch、声库选择及原生 WAV 混音 |
 | 托管数据目录重定向 | SV2 验证 | AppContainer 与主程序 Shell 路径重定向验证 |
 | 显式 WebKit 上下文回收 | 本机验证；不等于完整隔离 | NOT_SUPPORTED |
 | 完整联网隔离 | 尚未验证完整覆盖 | 尚未实现 |
@@ -45,11 +45,11 @@ Windows 支持 `--host <official-synthv-studio.exe> <profile-directory>`。启�
 
 当前后端以离线模式运行，动态联网开发中。AppContainer 也限制对 profile 之外项目路径的访问。
 
-Windows MCP 服务驻留在 SV2 内。右侧工具栏接入宿主原生 Extend 分类及独立插件分类，面板内容由跟随宿主停靠区域的 Win32 控件渲染；插件使用相同的声明式 UI API，不直接使用宿主控件。官方 2.3.0 隔离宿主已验证分类打开和关闭，以及实际屏幕缩放 100%→150%→100% 时的面板与字体尺寸；重复提交相同插件状态时焦点和滚动位置保持。客户端使用 `Native/Sv2Mcp.exe --endpoint Profile/outputs/mcp-endpoint.json` 建立 stdio 连接；该程序只转发 MCP，无常驻管理逻辑。内部官方 Lua 后端自动启动，用户无需运行脚本或使用 Lua 面板。入口有官方 2.3.0 的版本与字节校验，后端未就绪时不公布工具。
+Windows MCP 服务驻留在 SV2 内。右侧工具栏接入宿主原生 Extend 分类及独立插件分类，面板内容由跟随宿主停靠区域的原生 SV 组件渲染；插件使用相同的声明式 UI API，不直接使用宿主控件。官方 2.3.0 隔离宿主已验证分类打开和关闭，以及实际屏幕缩放 100%→150%→100% 时的面板与字体尺寸；重复提交相同插件状态时焦点和滚动位置保持。客户端使用 `Native/Sv2Mcp.exe --endpoint Profile/outputs/mcp-endpoint.json` 建立 stdio 连接；该程序只转发 MCP，无常驻管理逻辑。内部官方 Lua 后端自动启动，用户无需运行脚本或使用 Lua 面板。入口有官方 2.3.0 的版本与字节校验，后端未就绪时不公布工具。
 
 Windows 插件设置和右侧入口显隐保存在 profile 的 `preferences/windows-plugin-ui.json`；macOS 使用 `preferences/extend-ui.json`。两平台保持同一 SDK 契约，各自渲染面板内容。
 
-已在真实隔离宿主验证读取工程、创建普通音符组、添加与删除音符、音高及 pitchDelta 编辑、过期 guard 拒绝与测试内容清理。主组添加/删除音符会在调用原版前拒绝。声库选择和 WAV 导出尚未开放。
+已在真实隔离宿主验证读取工程、创建普通音符组、添加与删除音符、音高及 pitchDelta 编辑、过期 guard 拒绝与测试内容清理。主组添加/删除音符会在调用原版前拒绝。隔离宿主已通过声库身份读取和选择，以及 MCP、官方 Lua 和 JS 的原生 WAV 导出。工程声库清单和其他能力按运行时注册情况公布；新改动的 macOS 宿主执行尚未验证。
 
 ## Windows 开发构建
 
@@ -73,6 +73,22 @@ Windows 启动采用 suspended 主线程 + pre-start APC，代码在 `DllMain` �
 JSON 依赖固定为 nlohmann/json 3.11.3，Shell 与编辑器入口使用 MinHook；许可证随构建的 THIRD-PARTY-NOTICES.txt 提供。构建不会下载或分发官方 SV2。
 
 SDK 的 64 位 API 表现为 264 字节，新增 WebKit 上下文回收函数在尾部偏移 240；另有命名空间存储读写在偏移 248/256，旧字段位置保持。macOS arm64/x86_64 与 Windows x64 ABI 静态检查通过；Windows 官方隔离宿主已验证 Core、插件和原生分类面板。未实现的 API 继续返回 NOT_SUPPORTED。
+
+## 接口检查
+
+以下检查比较两平台内置 MCP 名称、方法与描述，并验证 Windows 注册和调用契约。需要 Python 3、MinGW-w64 和 Lua 运行时：
+
+```powershell
+python test/check_mcp_contract.py
+New-Item -ItemType Directory -Force test/.outputs
+g++ -std=c++17 -pthread test/windows_mcp_protocol.cpp -o test/.outputs/mcp-contract.exe
+./test/.outputs/mcp-contract.exe
+g++ -std=c++17 test/windows_editor_lua_service.cpp -lbcrypt -luser32 -o test/.outputs/editor-contract.exe
+./test/.outputs/editor-contract.exe
+lua test/script_voice_project_contract.lua
+```
+
+这些是接口和模拟工程检查。实际宿主版本、能力注册、声库授权、原生渲染与输出文件仍需在目标宿主验证。
 
 ## Windows 安装
 

@@ -1,29 +1,26 @@
-Extend 0.6.0：WAV 混音导出 API
+WAV 混音导出 API
 
-适配并验证 SV2 2.3.0 arm64。Loader 为 universal，但未知构建与 Intel 不发布原生导出能力。
-MCP、官方 Lua Extend、JS Extend 使用同一个驻留宿主的 Loader 能力路由；无外部常驻管理进程，无文件/pipe 请求桥接。
+MCP、Lua 和 JavaScript 使用宿主内同一编辑器 provider。原生适配器未就绪时，导出方法不会出现在能力列表中。
 
-公开方法：
-exports.snapshot({}) -> guard、15 秒有效期、原生 busy/pending。
-exports.start({guard,outputPath,channels,sampleRate,bitDepth}) -> jobId、state=running。
-exports.status({jobId}) -> running/cancelling/completed/cancelled/failed。
-exports.cancel({jobId}) -> 请求原生取消；继续查询 status 确认最终状态。
+方法：
+exports.snapshot({}) -> guard、15 秒有效期、busy、pending。
+exports.start({guard,outputPath,channels,sampleRate,bitDepth}) -> jobId、state。
+exports.status({jobId}) -> running、cancelling、completed、cancelled 或 failed。
+exports.cancel({jobId}) -> 请求取消；继续查询 status，直到确认终态。
 
-MCP 工具：sv_export_snapshot、sv_export_wav、sv_export_status、sv_export_cancel。
-必须使用当前工程的新 guard。outputPath 是绝对 .wav 路径，父目录必须存在；channels 为 1/2，sampleRate 为 44100/48000/88200/96000，bitDepth 为 16/24/32。
-实现只承诺 WAV 混音。分轨、MIDI、UST、音高文件及分离气声导出尚未实现。
+MCP 名称：sv_export_snapshot、sv_export_wav、sv_export_status、sv_export_cancel。
+outputPath 必须是父目录已存在的绝对 .wav 路径；已有目标不会被覆盖。
+channels 为 1 或 2，bitDepth 为 16、24 或 32。Windows 支持 44100、48000、96000 Hz；macOS arm64 还支持 88200 Hz。仅支持 WAV 混音。
 
-操作过程：先 snapshot，再 start，按约 100–250ms 间隔查询 status，直到终态。不要阻塞脚本/UI 线程。保持同一个工程打开；切换工程会拒绝或使活动任务失败，暂存输出留供恢复。
-导出通过宿主原生渲染器启动，在启动函数内临时应用输出设置，返回前恢复原工程配置；不新增工程 Undo，不修改音符或声库。
-输出先写到目标目录旁独立 .svext-export-UUID 子目录。查询 status 观察到渲染结束时校验 WAV 格式，并原子发布；已有目标文件绝不覆盖，包括渲染期间新创建的文件。未查询 status 时文件可能仍留在暂存目录，后续 start 也会尝试收尾同工程的前一任务。
-取消或失败保留暂存目录，取消不发布最终目标。返回 stagingDirectory 可用于诊断/手动恢复；不要把暂存音频当作成功导出。
-任务驻留内存，最多保留最近 32 个，旧的终态任务可淘汰。宿主退出后任务状态丢失，暂存文件保留；不声称支持断点恢复或大于 RIFF 限制的超大 WAV。
+先获取快照，再用当前工程的新 guard 启动。轮询 status 并保持工程打开。导出使用目标目录旁的独立暂存目录；只有原生渲染结束、WAV 格式验证通过且目标仍不存在时才发布。取消或失败不发布最终文件，暂存文件保留供检查。configRestored 表示原工程的导出设置已恢复；发生恢复失败或工程切换时应检查状态。
 
-JS（官方脚本 main 内）：
+Windows 使用原生 Render 控件配置和启动，等待原生渲染生命周期结束后恢复设置。macOS 在原生启动调用期间临时配置并恢复设置。各平台按实际原生能力公布工具；无外部常驻编辑器管理进程。
+
+JS（在官方脚本 main 中，OUTPUT_WAV 为调用方提供的路径）：
 var Extend = eval(Duktape.enc('opensv2.module.v1', ''));
 Extend.exports.snapshot(function (error, snapshot) {
   if (error) { SV.print(error.code); return; }
-  Extend.exports.start({guard:snapshot.guard, outputPath:'/绝对路径/demo.wav',
+  Extend.exports.start({guard:snapshot.guard, outputPath:OUTPUT_WAV,
     channels:1, sampleRate:48000, bitDepth:24}, function (error, job) {
     if (error) { SV.print(error.code); return; }
     function poll() {
@@ -39,10 +36,10 @@ Extend.exports.snapshot(function (error, snapshot) {
   });
 });
 
-Lua（设置好 package.path，require('sv2_extend') 后）：
+Lua（设置 package.path 并 require('sv2_extend') 后）：
 Extend.exports.snapshot(function(snapshot, err)
   if err then SV:print(err.code); return end
-  Extend.exports.start({guard=snapshot.guard, outputPath='/绝对路径/demo.wav',
+  Extend.exports.start({guard=snapshot.guard, outputPath=OUTPUT_WAV,
     channels=1, sampleRate=48000, bitDepth=24}, function(job, err)
     if err then SV:print(err.code); return end
     local function poll()
@@ -58,13 +55,4 @@ Extend.exports.snapshot(function(snapshot, err)
   end)
 end)
 
-验证证据：
-历史本机私有验证记录 exports-public-runtime.json（不随公开源码分发）：MCP 中文路径与不同音频参数；12 项拒绝/保留检查；4 项真实取消检查；4 项发布竞争检查；JS、Lua 各 4 项真实脚本导出检查。
-历史本机安装记录 exports-installed-0.6.0.json（不随公开源码分发）：最终安装入口的 12 项真实导出检查，包含和官方界面 WAV 的 SHA256 完全一致、音符/声库不变及无管理子进程。
-export_job_test.mm：发布、竞争、原生取消标志、输出格式不匹配 4 项收尾场景。
-
-0.9.10 回归：run-installed-export-regression.py 复制已安装 Loader，保留其 Core，使用独立偏好域、隔离 profile 和 tests/fixtures/export-one-note.svp 的临时副本。在官方脚本菜单分别执行 Extend Acceptance 下的 Lua/JS 导出脚本：Lua 44100Hz/16-bit mono、JS 48000Hz/24-bit mono，均取得 running → completed，configRestored=true；独立 Python wave 解析格式和非空音频帧，另核对音频数据含非零字节。成功后退出测试宿主并删除本次偏好域。此回归不覆盖取消或已有输出拒绝；不能代替早期版本相应检查，也不构成账号或完整网络隔离证明。
-
-0.9.10 导出边界：独立隔离工程将测试音符延长，安装版 Core/MCP 的真实渲染经历 running → cancelling → cancelled；终态后没有发布最终 WAV，并能再次获取快照。预先存在的独立输出以 OUTPUT_EXISTS 拒绝，原字节保持不变，8 项检查通过。驱动开始时错误地等待快照中的工程文件名（接口实际不返回该字段）；已停止该驱动，在 GUI 确认测试工程后于同一宿主 PID 继续，未重启宿主。此结果限定于 MCP/共享原生导出，不代表两种语言各自的取消回调验收。测试宿主已退出。
-
-复现准备：python3 loader/macos/run-installed-export-boundaries.py。用 GUI 打开打印的 project 路径并确认窗口，再在该 runDirectory 创建 project-open-confirmed 诊断确认文件；驱动等待该确认后开始测试。这只是测试编排，生产请求与状态仍通过驻留 MCP/API，无文件 Bridge。
+Windows 2.3.0 的隔离宿主已验证 MCP、官方 Lua 和 JS 的原生 WAV 导出与非静音 PCM；取消行为需以当前宿主的最终状态确认。新共享代码尚未在 macOS 宿主复测。
