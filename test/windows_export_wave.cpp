@@ -11,5 +11,6 @@ int main(){
  write_file(output,{9});assert(export_wave::publish(stage,output,1,44100,16,audio)==export_wave::Result::output_exists);assert(std::filesystem::file_size(output)==1&&std::filesystem::exists(stage));assert(DeleteFileW(output.c_str()));
  assert(export_wave::publish(stage,output,1,44100,16,audio)==export_wave::Result::ok);assert(audio.audio_bytes==4&&audio.channels==1&&audio.rate==44100&&audio.bits==16);assert(!std::filesystem::exists(stage));
  wav[40]=100;write_file(stage,wav);assert(export_wave::publish(stage,root/L"bad.wav",1,44100,16,audio)==export_wave::Result::invalid_output);assert(!std::filesystem::exists(root/L"bad.wav"));
+ assert(DeleteFileW(stage.c_str()));wav[40]=4;write_file(stage,wav);auto linked=root/L"linked.wav";assert(CreateHardLinkW(linked.c_str(),stage.c_str(),nullptr));assert(export_wave::publish(stage,root/L"hardlink-output.wav",1,44100,16,audio)==export_wave::Result::invalid_output);assert(std::filesystem::exists(linked));assert(DeleteFileW(linked.c_str()));
  assert(DeleteFileW(stage.c_str()));assert(DeleteFileW(output.c_str()));assert(RemoveDirectoryW(root.c_str()));std::cout<<"WAV validation and publication passed\n";
 }
