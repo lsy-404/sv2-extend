@@ -27,6 +27,7 @@ static char *intercept(const char *name){
 }
 
 bool version_matches(){
+ static const bool verified=[](){
  wchar_t path[32768];DWORD length=GetModuleFileNameW(nullptr,path,32768);if(!length||length>=32768)return false;
  HANDLE file=CreateFileW(path,GENERIC_READ,FILE_SHARE_READ,nullptr,OPEN_EXISTING,FILE_ATTRIBUTE_NORMAL,nullptr);if(file==INVALID_HANDLE_VALUE)return false;
  BCRYPT_ALG_HANDLE algorithm=nullptr;BCRYPT_HASH_HANDLE hash=nullptr;DWORD objectSize=0,got=0;std::array<unsigned char,32> digest{};bool ok=false;
@@ -40,7 +41,11 @@ bool version_matches(){
   }
  }
  if(hash)BCryptDestroyHash(hash);if(algorithm)BCryptCloseAlgorithmProvider(algorithm,0);CloseHandle(file);return ok;
+
+ }();
+ return verified;
 }
+
 int install(editor_lua::Service *service){
  if(!service || resident || GetCurrentThreadId()!=service->thread || !version_matches())return LOADER_ERR_NOT_SUPPORTED;
  auto base=reinterpret_cast<unsigned char*>(GetModuleHandleW(nullptr));auto dos=reinterpret_cast<IMAGE_DOS_HEADER*>(base);

@@ -1,6 +1,6 @@
 # 插件状态存储
 
-新 SDK 在表尾追加 `plugin_storage_write_scoped`（偏移 248）和 `plugin_storage_read_scoped`（偏移 256），64 位 API 表长为 264。调用前检查结构长度、`LOADER_CAP_SCOPED_STORAGE` 和对应函数指针。macOS 提供本机实现；Windows 开发后端目前明确返回 NOT_SUPPORTED，不设置此能力位。
+SDK 提供 `plugin_storage_write_scoped`（偏移 248）和 `plugin_storage_read_scoped`（偏移 256），所需最小表长为 264，当前 64 位 API 表长为 272。调用前检查结构长度、`LOADER_CAP_SCOPED_STORAGE` 和对应函数指针。macOS 和 Windows 受管宿主均提供本机实现。
 
 每个插件应使用自己的 manifest/provider ID。新状态放在 profile 的 `plugin-data/<插件ID>/<key>`，与安装包分离，避免插件目录改名、升级、卸载或重新安装时产生冲突。目录迁移包含 plugin-data；选择已有 profile 不合并另一份状态，目标同名数据存在时拒绝覆盖。删除插件包不自动清除此数据。
 

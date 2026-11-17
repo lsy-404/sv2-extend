@@ -84,6 +84,15 @@ int network_gate_set(int value) {
 }
 int network_gate_get(void) { [lock lock]; int result=blocked; [lock unlock]; return result; }
 
+int network_gate_policy(loader_network_policy_state_v1 *state) {
+    if(!state || state->abi_version!=LOADER_ABI_V1 || state->struct_size<sizeof(*state) || !lock)return LOADER_ERR_INVALID;
+    [transitionLock lock];
+    if(transitioning){[transitionLock unlock];return LOADER_ERR_INVALID;}
+    [lock lock];
+    *state=(loader_network_policy_state_v1){.abi_version=LOADER_ABI_V1,.struct_size=sizeof(*state),.generation=generation,.requested_blocked=blocked,.applied_blocked=blocked,.pending=0,.error=LOADER_OK};
+    [lock unlock];[transitionLock unlock];return LOADER_OK;
+}
+
 int network_gate_state(loader_network_state_v1 *state) {
     if(!state || state->abi_version!=LOADER_ABI_V1 || state->struct_size<sizeof(*state) || !lock) return LOADER_ERR_INVALID;
     [transitionLock lock];

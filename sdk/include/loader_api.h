@@ -11,6 +11,7 @@
 #define LOADER_CAP_WEB_RENDERER_RETIREMENT (1ull << 7)
 #define LOADER_CAP_WEB_CONTEXT_RETIREMENT (1ull << 8)
 #define LOADER_CAP_SCOPED_STORAGE (1ull << 9)
+#define LOADER_CAP_NETWORK_POLICY_SWITCH (1ull << 10)
 /* Body is borrowed for this callback only; callback may run off the main thread. */
 typedef void (*loader_http_completion)(int32_t status, int32_t error, const uint8_t *body, size_t length, void *context);
 /* UI events are synchronous/main-thread, borrowed JSON. Never route account actions through MCP. */
@@ -56,6 +57,12 @@ typedef struct {
     uint32_t tracked_tasks_drained;
     uint32_t whole_host_verified;
 } loader_network_state_v1;
+typedef struct {
+    uint32_t abi_version,struct_size;
+    uint64_t generation;
+    uint32_t requested_blocked,applied_blocked,pending;
+    int32_t error;
+} loader_network_policy_state_v1;
 /* Persistent guards control the next startup independently of this process's
    temporary network policy. Opaque operation IDs carry no account/session data. */
 typedef struct {uint32_t abi_version,struct_size;uint64_t generation;uint32_t requested_blocked,active_guards,policy_valid,bootstrap_applied;} loader_startup_network_state_v1;
@@ -143,6 +150,8 @@ typedef struct {
        BUFFER_TOO_SMALL updates length without modifying the caller buffer. */
     int (*plugin_storage_write_scoped)(const char *plugin_id,const char *key,const uint8_t *data,size_t length);
     int (*plugin_storage_read_scoped)(const char *plugin_id,const char *key,uint8_t *data,size_t *length);
+    /* Applied policy is separate from tracked-task drainage and whole-host isolation. */
+    int (*get_host_network_policy)(loader_network_policy_state_v1 *state);
 } loader_api_v1;
 /* Return zero on success. Loader owns dlopen handle until host shutdown. */
 typedef int (*loader_plugin_init_v1_fn)(const loader_api_v1 *api);

@@ -24,6 +24,7 @@
 #include "plugin_storage.h"
 #include "voice_service.h"
 #include "export_native_service.h"
+#include "profile_lease.h"
 using json=nlohmann::json;namespace fs=std::filesystem;
 namespace {
 DWORD main_thread;HWND dispatcher;loader_api_v1 api{};std::string executable,host_directory;fs::path root;json package_results=json::array();bool managed=false,app_container=false;
@@ -31,6 +32,7 @@ std::vector<HMODULE> modules;
 std::unique_ptr<script_runtime::Service> script_service;
 std::unique_ptr<voice_service::Service> native_voice;
 std::unique_ptr<export_service::Service> native_export;
+std::unique_ptr<profile_lease::Service> profile_operations;
 script_settings::Runtime lua_runtime{&api,"opensv2.lua-extend","Lua Extend",false},js_runtime{&api,"opensv2.javascript-extend","JS Extend",false};
 uint64_t capability_generation=1;
 std::unique_ptr<editor_lua::Service> editor_service;int editor_gate_result=LOADER_ERR_NOT_SUPPORTED,editor_start_result=LOADER_ERR_NOT_SUPPORTED;
@@ -127,8 +129,14 @@ const char *host_data(){return managed?host_directory.c_str():nullptr;}
 int guard(const char*,const char*,int){return LOADER_ERR_NOT_SUPPORTED;}
 int policy(loader_startup_network_state_v1*){return LOADER_ERR_NOT_SUPPORTED;}
 void guards(const char*,loader_json_completion done,void *context){const char body[]="{\"ok\":false,\"error\":{\"code\":\"NOT_SUPPORTED\"}}";if(done)done(body,sizeof body-1,context);}
-int lease(const char*,const char*){return LOADER_ERR_NOT_SUPPORTED;}
-int lease_state(loader_profile_lease_state_v1*){return LOADER_ERR_NOT_SUPPORTED;}
+int acquire_profile(const char *owner,const char *operation){
+ if(!on_main()||!profile_operations)return LOADER_ERR_INVALID;
+ bool busy=native_export&&(!native_export->active.empty()||native_export->recovery_required);
+ if(export_native::root){void *project=nullptr,*renderer=nullptr;bool running=false,waiting=false,stopping=false;if(!export_service::project(project,renderer)||!export_service::render_flags(renderer,running,waiting,stopping))busy=true;else busy=busy||running||waiting||stopping;}
+ int result=profile_operations->acquire(owner,operation,busy);if(result==LOADER_OK&&native_export)native_export->profile_exclusive=profile_operations->exclusive();return result;
+}
+int release_profile(const char *owner,const char *operation){if(!on_main()||!profile_operations)return LOADER_ERR_INVALID;int result=profile_operations->release(owner,operation);if(result==LOADER_OK&&native_export)native_export->profile_exclusive=profile_operations->exclusive();return result;}
+int lease_state(loader_profile_lease_state_v1 *state){return profile_operations?profile_operations->state(state):LOADER_ERR_NOT_SUPPORTED;}
 int retire_web(uint64_t,loader_json_completion,void*){return LOADER_ERR_NOT_SUPPORTED;}
 bool regular(const fs::path &path,bool directory=false){std::error_code error;auto status=fs::symlink_status(path,error);if(error||fs::is_symlink(status))return false;DWORD attr=GetFileAttributesW(path.c_str());return attr!=INVALID_FILE_ATTRIBUTES&&!(attr&FILE_ATTRIBUTE_REPARSE_POINT)&&(directory?fs::is_directory(status):fs::is_regular_file(status));}
 void startup_receipt();
@@ -167,18 +175,19 @@ void loader_category_after_root(){if(managed&&on_main())category_tick();}
 void loader_category_cleanup_root(){if(managed&&on_main())native_category_registry::set_host(nullptr);}
 extern "C" __declspec(dllexport) int ExtendInitialize(void*){
  if(dispatcher)return main_thread==GetCurrentThreadId()?0:LOADER_ERR_INVALID;
- app_container=token_is_app_container();managed=flag_enabled(L"OPEN_SV2_WINDOWS_MANAGED");if(managed&&!app_container)return LOADER_ERR_NOT_SUPPORTED;if(!managed&&!flag_enabled(L"OPEN_SV2_WINDOWS_FIXTURE"))return LOADER_ERR_NOT_SUPPORTED;
+ app_container=token_is_app_container();managed=flag_enabled(L"OPEN_SV2_WINDOWS_MANAGED");if(managed&&app_container)return LOADER_ERR_NOT_SUPPORTED;if(!managed&&!flag_enabled(L"OPEN_SV2_WINDOWS_FIXTURE"))return LOADER_ERR_NOT_SUPPORTED;
  main_thread=GetCurrentThreadId();if(!read_path(L"OPEN_SV2_LOADER_DATA_DIR",root))return LOADER_ERR_STORAGE_NOT_CONFIGURED;if(!regular(root,true))return LOADER_ERR_INVALID;if(!plugin_storage::install(root))return LOADER_ERR_STORAGE_IO;
  if(managed){fs::path actual;if(!read_path(L"OPEN_SV2_HOST_DATA_DIR",actual)||CompareStringOrdinal(actual.c_str(),-1,(root/L"host-data").c_str(),-1,TRUE)!=CSTR_EQUAL||!regular(actual,true)||actual.native().size()+12>=MAX_PATH||!data_namespace::install(actual.wstring()))return LOADER_ERR_INVALID;host_directory=actual.u8string();}
  WNDCLASSW cls{};cls.lpfnWndProc=window_proc;cls.hInstance=GetModuleHandleW(nullptr);cls.lpszClassName=L"SV2Extend.Resident.Dispatch.v1";
  if(!RegisterClassW(&cls))return LOADER_ERR_INVALID;
  dispatcher=CreateWindowExW(0,cls.lpszClassName,L"",0,0,0,0,0,HWND_MESSAGE,nullptr,cls.hInstance,nullptr);if(!dispatcher||!SetTimer(dispatcher,1,100,nullptr)||native_panel::install(dispatcher,root.c_str())!=LOADER_OK)return LOADER_ERR_INVALID;
  wchar_t host[32768];DWORD n=GetModuleFileNameW(nullptr,host,32768);if(!n||n>=32768)return LOADER_ERR_INVALID;executable=fs::path(host).u8string();
- api.abi_version=1;api.struct_size=sizeof api;api.capabilities=LOADER_CAP_NETWORK_STATE|LOADER_CAP_PLUGIN_UI|LOADER_CAP_SCOPED_STORAGE|(managed?LOADER_CAP_HOST_DATA_NAMESPACE:0);api.host_pid=GetCurrentProcessId();api.on_main_thread=1;api.host_executable=executable.c_str();api.log=log_message;
+ profile_operations=std::make_unique<profile_lease::Service>(main_thread,managed);
+ api.abi_version=1;api.struct_size=sizeof api;api.capabilities=LOADER_CAP_NETWORK_STATE|LOADER_CAP_PLUGIN_UI|LOADER_CAP_SCOPED_STORAGE|(managed?(LOADER_CAP_HOST_DATA_NAMESPACE|LOADER_CAP_PROFILE_LEASE):0);api.host_pid=GetCurrentProcessId();api.on_main_thread=1;api.host_executable=executable.c_str();api.log=log_message;
  api.set_host_network_blocked=block;api.host_network_blocked=blocked;api.plugin_http_get=http;api.get_host_network_state=network_state;api.verify_host_network_quiescence=verify;api.plugin_storage_write=storage;
  api.register_editor_adapter=register_editor;api.unregister_editor_adapter=unregister_editor;api.editor_request_json=request;api.request_capability_json=request;api.register_capability_provider=register_provider;api.unregister_capability_provider=unregister_provider;
  api.listen_local_json=listen;api.stop_local_json=stop;api.host_data_directory=host_data;api.register_plugin_ui=native_panel::register_ui;api.unregister_plugin_ui=native_panel::unregister_ui;api.update_plugin_ui=native_panel::update_ui;
- api.set_startup_network_guard=guard;api.get_startup_network_policy=policy;api.list_startup_network_guards=guards;api.acquire_profile_exclusive=lease;api.release_profile_exclusive=lease;api.get_profile_lease_state=lease_state;api.retire_host_web_renderers=retire_web;api.retire_host_web_contexts=retire_web;api.plugin_storage_write_scoped=storage_scoped;api.plugin_storage_read_scoped=storage_read;
+ api.set_startup_network_guard=guard;api.get_startup_network_policy=policy;api.list_startup_network_guards=guards;api.acquire_profile_exclusive=acquire_profile;api.release_profile_exclusive=release_profile;api.get_profile_lease_state=lease_state;api.retire_host_web_renderers=retire_web;api.retire_host_web_contexts=retire_web;api.plugin_storage_write_scoped=storage_scoped;api.plugin_storage_read_scoped=storage_read;
  if(managed){editor_service=std::make_unique<editor_lua::Service>(&api);editor_gate_result=editor_gate::install(editor_service.get());if(editor_gate_result==LOADER_OK){auto entry=root/L"host-data"/L"Roaming"/L"Dreamtonics"/L"Synthesizer V Studio 2"/L"scripts"/L"opensv2-loader-runtime.lua";editor_start_result=editor_autostart::install(editor_service.get(),entry.c_str());}}
  native_panel::set_categories_changed(category_sync);native_panel::set_open_category(native_category_registry::open_category);
  script_service=std::make_unique<script_runtime::Service>(&api);editor_gate::set_router(script_call);

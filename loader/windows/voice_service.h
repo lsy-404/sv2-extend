@@ -53,7 +53,7 @@ struct Service {
    if(args.size()!=1||!args.contains("token")||!args["token"].is_string()||args["token"]!=token||token.empty())return fail("VOICE_CAPTURE_TOKEN_MISMATCH");
    if(selectionEnd!=selection.is_object())return fail("VOICE_CAPTURE_MODE_MISMATCH");
    bool valid=voice_adapter::finish()&&(selectionEnd?result.is_object():captured.is_object());auto value=selectionEnd?std::move(result):success(std::move(captured));clear();
-   if(!valid)return fail("VOICE_CAPTURE_MISSING_OR_AMBIGUOUS");if(!selectionEnd){validated=true;json catalog;catalogValidated=voice_catalog_native::probe(thread,catalog);}return value;
+   if(!valid)return fail("VOICE_CAPTURE_MISSING_OR_AMBIGUOUS");if(!selectionEnd){validated=true;if(!catalogValidated){json catalog;catalogValidated=voice_catalog_native::probe(thread,catalog);}}return value;
   }
   return fail("UNSUPPORTED_HOST_CAPABILITY");
  }

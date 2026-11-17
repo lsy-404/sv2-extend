@@ -72,7 +72,7 @@ Windows 启动采用 suspended 主线程 + pre-start APC，代码在 `DllMain` �
 
 JSON 依赖固定为 nlohmann/json 3.11.3，Shell 与编辑器入口使用 MinHook；许可证随构建的 THIRD-PARTY-NOTICES.txt 提供。构建不会下载或分发官方 SV2。
 
-SDK 的 64 位 API 表现为 264 字节，新增 WebKit 上下文回收函数在尾部偏移 240；另有命名空间存储读写在偏移 248/256，旧字段位置保持。macOS arm64/x86_64 与 Windows x64 ABI 静态检查通过；Windows 官方隔离宿主已验证 Core、插件和原生分类面板。未实现的 API 继续返回 NOT_SUPPORTED。
+SDK 的 64 位 API 表长为 272 字节。WebKit 上下文回收位于偏移 240，命名空间存储读写位于 248/256，网络策略状态位于 264；旧字段位置保持。消费者需检查表长、能力位和函数指针。网络策略已应用、连接已排空及整个宿主已隔离是三个不同条件。未实现的 API 返回 NOT_SUPPORTED。
 
 ## 接口检查
 

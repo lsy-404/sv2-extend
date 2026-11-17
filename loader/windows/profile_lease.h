@@ -6,7 +6,7 @@
 
 namespace profile_lease {
 class Service {
- DWORD thread;bool ready;uint32_t mode;uint64_t generation;std::string owner,operation,last_owner,last_operation;
+ DWORD thread;bool ready;uint32_t mode;uint64_t generation;std::string owner,operation;
  static bool name(const char *value,size_t limit){
   if(!value||!value[0])return false;
   for(size_t i=0;i<=limit;i++){
@@ -26,9 +26,9 @@ public:
  }
  int release(const char *who,const char *what){
   if(!valid(who,what))return LOADER_ERR_INVALID;if(!ready)return LOADER_ERR_NOT_SUPPORTED;
-  if(mode==LOADER_PROFILE_LEASE_SHARED)return last_owner==who&&last_operation==what?LOADER_OK:LOADER_ERR_INVALID;
+  if(mode==LOADER_PROFILE_LEASE_SHARED)return LOADER_OK;
   if(owner!=who||operation!=what)return LOADER_ERR_INVALID;
-  last_owner=owner;last_operation=operation;owner.clear();operation.clear();mode=LOADER_PROFILE_LEASE_SHARED;++generation;return LOADER_OK;
+  owner.clear();operation.clear();mode=LOADER_PROFILE_LEASE_SHARED;++generation;return LOADER_OK;
  }
  int state(loader_profile_lease_state_v1 *value)const{
   if(GetCurrentThreadId()!=thread||!value||value->abi_version!=LOADER_ABI_V1||value->struct_size<sizeof *value)return LOADER_ERR_INVALID;
