@@ -5,6 +5,7 @@ int main(){using namespace export_service;
 
  Job unseen;assert(observe(unseen,false,false,true,false,false)==Progress::waiting&&!unseen.native_done);
  Service service;Job changed;changed.phase="done";changed.error="EXPORT_PROJECT_CHANGED";changed.config_restored=false;assert(service.view(changed)["configRestored"]==false);Job unmodified;assert(service.view(unmodified)["configRestored"]==true);
+ Job rejected;rejected.error="RENDER_CANCEL_REJECTED";rejected.error_reason="MODAL_STATE_UNKNOWN_OR_ACTIVE";assert(service.view(rejected)["error"]["reason"]=="MODAL_STATE_UNKNOWN_OR_ACTIVE");
  Job normal;assert(observe(normal,false,false,false,false,false)==Progress::waiting&&!normal.native_done);assert(observe(normal,true,true,false,false,false)==Progress::waiting);assert(observe(normal,false,true,true,false,false)==Progress::finished&&normal.native_done&&normal.error.empty());
  Job cancel;cancel.cancel_requested=true;assert(observe(cancel,false,false,false,false,false)==Progress::waiting);assert(observe(cancel,true,true,false,false,false)==Progress::request_cancel);cancel.cancel_dispatched=true;assert(observe(cancel,true,true,false,true,false)==Progress::waiting);assert(observe(cancel,false,true,true,true,false)==Progress::finished&&cancel.cancel_seen&&cancel.error.empty());
  Job spontaneous;assert(observe(spontaneous,true,true,false,false,false)==Progress::waiting);assert(observe(spontaneous,false,true,true,true,false)==Progress::finished&&spontaneous.cancel_seen);
