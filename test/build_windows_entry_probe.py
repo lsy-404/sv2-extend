@@ -14,6 +14,7 @@ out=args.out.resolve()
 if not out.is_relative_to(test) or out==test: raise ValueError('Use an output directory under test')
 out.mkdir(parents=True,exist_ok=True)
 core=(source/'core.cpp').read_text(encoding='utf-8')
+core='#define NATIVE_CATEGORY_TRACE\n'+core
 core=core.replace('#include "editor_autostart.h"','#include "editor_autostart.h"\n#include "windows_entry_runtime_probe.h"')
 core=core.replace(' native_panel::diagnostic();',' windows_entry_probe::tick(root);\n native_panel::diagnostic();')
 assert core.count('load_packages();startup_receipt();')==1

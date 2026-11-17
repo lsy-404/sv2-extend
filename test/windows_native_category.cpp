@@ -21,9 +21,19 @@ static void updated(void *, const char *id, HWND, const RECT &rect, bool visible
 static void removed(void *) {}
 static native_category_registry::RectI *content(void *, native_category_registry::RectI *out) { *out = {0, 44, 100, 156}; return out; }
 template<class T> static void put(unsigned char *where, size_t offset, T value) { std::memcpy(where + offset, &value, sizeof value); }
+static unsigned char pixels[64][64];
+static void paint_line(void *,int x,int y,int w,int h){for(int j=y;j<y+h&&j<64;++j)for(int i=x;i<x+w&&i<64;++i)if(i>=0&&j>=0)pixels[j][i]=1;}
 int main() {
  using namespace native_category_registry;
  (void)&set_host; (void)&tick; (void)&open_category; (void)&close_category; (void)&category_open; (void)&status;
+ BarItem items[]={{false,true,8},{false,true,20},{true,true,38},{true,true,50}};
+ if(extension_boundary(items,4)!=2)return 24;
+ test_separator_draw=paint_line;draw_extension_separator(nullptr,nullptr,40,items[2].y);
+ for(int y=0;y<64;++y)for(int x=0;x<64;++x)if(pixels[y][x]!=(y==32&&x>=6&&x<34))return 25;
+ items[2].visible=false;if(extension_boundary(items,4)!=3)return 26;
+ items[3].visible=false;if(extension_boundary(items,4)!=-1)return 27;
+ items[2].visible=true;items[0].visible=items[1].visible=false;if(extension_boundary(items,4)!=-1)return 28;
+ test_separator_draw=nullptr;
  if (prepare(reinterpret_cast<unsigned char *>(1), GetCurrentThreadId(), updated, removed, owned)) return 3;
  SYSTEM_INFO system{}; GetSystemInfo(&system);
  auto memory = static_cast<unsigned char *>(VirtualAlloc(nullptr, system.dwPageSize * 2, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE));

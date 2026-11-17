@@ -211,6 +211,49 @@ static bool button_title(void *button, const char *title) {
  if (release_string(old)) return true;
  *slot = old; release_string(replacement); return false;
 }
+struct BarItem { bool custom, visible; int y; };
+static int extension_boundary(const BarItem *items,int count) {
+ bool host_seen=false;
+ for(int i=0;i<count;++i){if(!items[i].visible)continue;if(items[i].custom){if(host_seen)return i;}else host_seen=true;}
+ return -1;
+}
+#ifdef NATIVE_CATEGORY_TRACE
+static unsigned separator_draw_count;
+static float separator_last_rect[4]{};
+static unsigned separator_last_colour;
+#endif
+#ifdef NATIVE_CATEGORY_TEST
+static void (*test_separator_draw)(void *,int,int,int,int);
+#endif
+static void draw_extension_separator(void *bar,void *graphics,int width,int y) {
+ if(width<=12||y<6)return;
+#ifdef NATIVE_CATEGORY_TEST
+ if(test_separator_draw){test_separator_draw(graphics,6,y-6,width-12,1);return;}
+#endif
+ struct RectF {float x,y,width,height;};
+ alignas(16) unsigned char transform[0x48]{};RectF source{6.0f,float(y-6),float(width-12),1.0f},scaled{};RectI pixels{};RectF mapped{};
+ reinterpret_cast<void*(*)(void*,void*,uint64_t)>(image+0xc0c550)(transform,bar,0);
+ reinterpret_cast<void*(*)(void*,void*,void*)>(image+0xc0cbd0)(transform,&scaled,&source);
+ int left=(int)std::nearbyint(scaled.x),right=(int)std::nearbyint(scaled.x+scaled.width);
+ pixels={left,(int)std::nearbyint(scaled.y),right-left,(std::max)(0,*reinterpret_cast<int*>(transform+4))};
+ reinterpret_cast<void*(*)(void*,void*,void*)>(image+0xc0cd00)(transform,&mapped,&pixels);
+ unsigned colour=0;std::memcpy(&colour,image+0x178f2d0,sizeof colour);colour=(colour&0x00ffffffu)|0x40000000u;
+ reinterpret_cast<void(*)(void*,unsigned)>(image+0xd06280)(graphics,colour);
+ void *context=nullptr;std::memcpy(&context,static_cast<unsigned char*>(graphics)+8,sizeof context);auto table=*static_cast<void***>(context);
+ reinterpret_cast<void(*)(void*,const RectF*)>(table[0xa8/sizeof(void*)])(context,&mapped);
+#ifdef NATIVE_CATEGORY_TRACE
+ ++separator_draw_count;std::memcpy(separator_last_rect,&mapped,sizeof mapped);separator_last_colour=colour;
+#endif
+}
+static void bar_paint(void *bar,void *graphics) {
+ reinterpret_cast<void(*)(void*,void*)>(image+0xbd0560)(bar,graphics);
+ if(!prepared||!bars.count(bar)||!readable(bar,0x250)||!readable(graphics,0x10))return;
+ auto bytes=static_cast<unsigned char*>(bar);void **buttons=nullptr,**entries=nullptr;int count=0,entry_count=0,width=0;
+ std::memcpy(&buttons,bytes+0x240,sizeof buttons);std::memcpy(&count,bytes+0x24c,4);std::memcpy(&entries,image+0x180aae0,sizeof entries);std::memcpy(&entry_count,image+0x180aaec,4);std::memcpy(&width,bytes+0x40,4);
+ if(count!=entry_count||count<1||count>128||!readable(buttons,count*sizeof(void*))||!readable(entries,count*sizeof(void*)))return;
+ BarItem items[128]{};for(int i=0;i<count;++i){if(!readable(buttons[i],0xe9))return;auto category=registry_category(entries[i]);items[i].custom=category!=nullptr;items[i].visible=!category||(category->present&&category->visible);std::memcpy(&items[i].y,static_cast<unsigned char*>(buttons[i])+0x3c,4);}
+ int index=extension_boundary(items,count);if(index>=0)draw_extension_separator(bar,graphics,width,items[index].y);
+}
 static void layout_bar(void *bar) {
  auto bytes = static_cast<unsigned char *>(bar);
  if (!readable(bytes, 0x250)) return;
@@ -223,12 +266,13 @@ static void layout_bar(void *bar) {
  std::memcpy(&width, bytes + 0x40, 4); std::memcpy(&height, bytes + 0x44, 4);
  if (count != entry_count || count < 1 || count > 128 || width <= 0 || height <= 0 || !readable(buttons, count * sizeof(void *)) || !readable(entries, count * sizeof(void *))) return;
  bars.insert(bar);
- int active = 0;
+ BarItem items[128]{};int active = 0;
  for (int i = 0; i < count; ++i) {
   auto category = registry_category(entries[i]);
-  if (!category || (category->present && category->visible)) ++active;
+  items[i].custom=category!=nullptr;items[i].visible=!category||(category->present&&category->visible);if(items[i].visible)++active;
  }
- int row = (std::min)(48, (std::max)(12, (height - 28) / (std::max)(1, active))), y = 8;
+ int boundary=extension_boundary(items,count);
+ int row = (std::min)(48, (std::max)(12, (height - (boundary>=0?40:28)) / (std::max)(1, active))), y = 8;
  using SetVisible = void (*)(void *, bool);
  using SetBounds = void (*)(void *, int, int, int, int);
  auto set_visible = reinterpret_cast<SetVisible>(image + 0xc4e5b0);
@@ -243,6 +287,7 @@ static void layout_bar(void *bar) {
   if (!visible) { set_bounds(buttons[i], 0, 0, 0, 0); continue; }
   if (category && !button_title(buttons[i], category->title)) continue;
   if (buttons[i] == separator) y += 12;
+  if (i == boundary) y += 12;
   set_bounds(buttons[i], 0, y, width, row); y += row;
   if (!bars.count(bar)) return;
  }
@@ -313,6 +358,7 @@ static bool install_lifecycle(unsigned char *base) {
   {pane + 0xf0 / 8, base + 0xbce780, reinterpret_cast<void *>(pane_paint)},
   {pane + 0x138 / 8, base + 0xbd82e0, reinterpret_cast<void *>(pane_resized)},
   {bar, base + 0xbd0330, reinterpret_cast<void *>(bar_destroy)},
+  {bar + 0xf0 / 8, base + 0xbd0560, reinterpret_cast<void *>(bar_paint)},
   {bar + 0x138 / 8, base + 0xbd0af0, reinterpret_cast<void *>(bar_resized)}
  };
  return patch_slots(slots, sizeof slots / sizeof slots[0]);
@@ -359,6 +405,11 @@ static bool prepare(unsigned char *base, DWORD main_thread, DockUpdate update, D
  if (std::memcmp(base + 0xbd7b50, factory_signature, sizeof factory_signature)) return false;
  constexpr unsigned char content_signature[] = {0x48,0x89,0x5c,0x24,0x08,0x48,0x89,0x6c,0x24,0x10,0x48,0x89,0x74,0x24,0x18};
  constexpr unsigned char height_signature[] = {0xb8,0x2c,0,0,0,0xc3};
+ constexpr unsigned char transform_signature[] = {0x48,0x8b,0xc4,0x48,0x89,0x58,0x10,0x4c,0x89,0x40,0x18};
+ constexpr unsigned char scale_signature[] = {0x48,0x83,0xec,0x58,0xf3,0x0f,0x10,0x49,0x14};
+ constexpr unsigned char unscale_signature[] = {0x48,0x83,0xec,0x38,0xf3,0x0f,0x10,0x61,0x24};
+ constexpr unsigned char colour_signature[] = {0x48,0x89,0x5c,0x24,0x08,0x57,0x48,0x83,0xec,0x50};
+ prepare_result="separator_signature";if(std::memcmp(base+0xc0c550,transform_signature,sizeof transform_signature)||std::memcmp(base+0xc0cbd0,scale_signature,sizeof scale_signature)||std::memcmp(base+0xc0cd00,unscale_signature,sizeof unscale_signature)||std::memcmp(base+0xd06280,colour_signature,sizeof colour_signature))return false;
  prepare_result="geometry_signature";
  if (std::memcmp(base + 0xbcf2a0, content_signature, sizeof content_signature) || std::memcmp(base + 0x8ec3f0, height_signature, sizeof height_signature)) return false;
  constexpr unsigned char parse_signature[] = {0x48,0x89,0x5c,0x24,0x08,0x48,0x89,0x74,0x24,0x10};

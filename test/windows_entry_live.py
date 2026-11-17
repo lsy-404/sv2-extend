@@ -15,7 +15,8 @@ while not receipt.exists():
     time.sleep(.1)
 result = json.loads(receipt.read_text(encoding="utf-8"))
 assert result["scriptsEntries"] == 1, result
-for name in ("separatorInBounds", "scriptsCaption", "rootCaption", "rootOpened", "hiddenSaved", "hiddenRegistry", "nativeButton", "shortHeightHidden",
+assert result["separatorAlpha"] == 64 and result["separatorWidth"] > 0 and result["separatorHeight"] > 0, result
+for name in ("separatorInBounds", "separatorDrawn", "hiddenNoDraw", "scriptsCaption", "rootCaption", "rootOpened", "hiddenSaved", "hiddenRegistry", "nativeButton", "shortHeightHidden",
              "restoredSaved", "restoredRegistry", "rootOpenKnown", "rootOpen", "toggleValue", "toggleChecked"):
     assert result[name] is True, result
 print(json.dumps(result))
