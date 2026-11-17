@@ -84,6 +84,7 @@ end
 function M.http.get(url, callback) return M.http.request({url=url}, callback) end
 M.voicebanks = {}
 function M.voicebanks.current(callback) return M.call('voicebanks.current', {}, callback) end
+function M.voicebanks.project(callback) return M.call('voicebanks.project', {}, callback) end
 function M.voicebanks.list(callback) return M.call('voicebanks.list', {}, callback) end
 function M.voicebanks.select(identifier, guard, callback) return M.call('voicebanks.select', {voicebankId=identifier,guard=guard}, callback) end
 M.exports = {}

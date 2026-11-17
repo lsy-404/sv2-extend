@@ -10,18 +10,24 @@ namespace editor_gate {
 using Getenv=char *(*)(const char*);
 static Getenv original;
 static editor_lua::Service *resident;
+static Router route=nullptr;
+void set_router(Router router){route=router;}
 static thread_local std::string response;
 static constexpr char prefix[]="__OPEN_SV2_NATIVE_CALL_V1__:";
-static char *intercept(const char *name){
- if(!name || strncmp(name,prefix,sizeof(prefix)-1)!=0)return original(name);
- const char *body=name+sizeof(prefix)-1;size_t length=strnlen(body,1048577);
- if(length>1048576){response=editor_lua::Service::fail("REQUEST_TOO_LARGE").dump();return response.data();}
+const char *call_json(const char *body,size_t length,bool javascript){
+ if(!body||length>1048576){response=editor_lua::Service::fail("REQUEST_TOO_LARGE").dump();return response.c_str();}
  auto request=editor_lua::json::parse(body,body+length,nullptr,false);
- if(!request.is_object()||!request.contains("method")||!request["method"].is_string()||!request.contains("arguments")||!request["arguments"].is_object())response=editor_lua::Service::fail("INVALID_ARGUMENT").dump();
- else response=resident->call(request["method"].get<std::string>(),request["arguments"]).dump();
- return response.data();
+ if(!request.is_object()||!request.contains("method")||!request["method"].is_string())response=editor_lua::Service::fail("INVALID_ARGUMENT").dump();
+ else{auto method=request["method"].get<std::string>();auto args=request.value("arguments",editor_lua::json::object());if(!args.is_object())response=editor_lua::Service::fail("INVALID_ARGUMENT").dump();else if(length>262144&&method!="editor.reply")response=editor_lua::Service::fail("REQUEST_TOO_LARGE").dump();else response=(route?route(method,args,javascript):resident?resident->call(method,args):editor_lua::Service::fail("UNSUPPORTED_HOST_CAPABILITY")).dump();}
+ return response.c_str();
 }
+static char *intercept(const char *name){
+ if(!name||strncmp(name,prefix,sizeof(prefix)-1)!=0)return original(name);
+ const char *body=name+sizeof(prefix)-1;return const_cast<char*>(call_json(body,strnlen(body,1048577),false));
+}
+
 bool version_matches(){
+ static const bool verified=[](){
  wchar_t path[32768];DWORD length=GetModuleFileNameW(nullptr,path,32768);if(!length||length>=32768)return false;
  HANDLE file=CreateFileW(path,GENERIC_READ,FILE_SHARE_READ,nullptr,OPEN_EXISTING,FILE_ATTRIBUTE_NORMAL,nullptr);if(file==INVALID_HANDLE_VALUE)return false;
  BCRYPT_ALG_HANDLE algorithm=nullptr;BCRYPT_HASH_HANDLE hash=nullptr;DWORD objectSize=0,got=0;std::array<unsigned char,32> digest{};bool ok=false;
@@ -35,7 +41,11 @@ bool version_matches(){
   }
  }
  if(hash)BCryptDestroyHash(hash);if(algorithm)BCryptCloseAlgorithmProvider(algorithm,0);CloseHandle(file);return ok;
+
+ }();
+ return verified;
 }
+
 int install(editor_lua::Service *service){
  if(!service || resident || GetCurrentThreadId()!=service->thread || !version_matches())return LOADER_ERR_NOT_SUPPORTED;
  auto base=reinterpret_cast<unsigned char*>(GetModuleHandleW(nullptr));auto dos=reinterpret_cast<IMAGE_DOS_HEADER*>(base);

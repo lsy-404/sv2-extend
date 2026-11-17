@@ -1,6 +1,7 @@
 #include "../loader/windows/editor_autostart.cpp"
 #include <cassert>
 #include <thread>
+void loader_export_set_root(void*){}
 void loader_category_before_root(){}
 void loader_category_after_root(){}
 void loader_category_cleanup_root(){}

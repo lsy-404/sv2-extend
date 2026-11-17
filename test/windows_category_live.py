@@ -80,9 +80,9 @@ try:
     client.stdin.write(json.dumps({'jsonrpc': '2.0', 'method': 'notifications/initialized'}) + '\n')
     client.stdin.flush()
     required = {'svext_test_category_state', 'svext_test_category_change', 'svext_test_category_pause',
-                'svext_test_category_control', 'svext_test_category_resize', 'svext_read_editor',
-                'svext_create_group', 'svext_remove_group', 'svext_add_note', 'svext_remove_note',
-                'svext_set_note_pitch', 'svext_read_pitch_range', 'svext_set_pitch_curve'}
+                'svext_test_category_control', 'svext_test_category_resize', 'sv_read_editor',
+                'sv_create_group', 'sv_remove_group', 'sv_add_note', 'sv_remove_note',
+                'sv_set_note_pitch', 'sv_read_pitch_range', 'sv_set_pitch_curve'}
     deadline = time.monotonic() + 10
     while True:
         tools = {entry['name'] for entry in request('tools/list', {})['tools']}
@@ -95,7 +95,7 @@ try:
     print('Host geometry:', json.dumps({key: before[key] for key in ('hostClientWidth', 'hostClientHeight', 'hostDpi', 'guards')}, ensure_ascii=False))
     assert before['nativePrepared'] and before['editorReady']
     assert {'', 'boxy.sv2', 'sv2.mcp', 'test.category.fixture'} <= {entry['id'] for entry in before['categories']}
-    tool('svext_read_editor', {})
+    tool('sv_read_editor', {})
     for identifier in ('', 'boxy.sv2', 'sv2.mcp', 'test.category.fixture'):
         tool('svext_test_category_change', {'id': identifier, 'open': True})
         opened.append(identifier)
@@ -146,7 +146,7 @@ try:
     tool('svext_test_category_pause', {})
     time.sleep(1.5)
     assert state()['editorReady']
-    tool('svext_read_editor', {})
+    tool('sv_read_editor', {})
     print('PASS: native category lifecycle, controls, resize and editor heartbeat recovery')
 finally:
     if resized:
