@@ -13,8 +13,9 @@ int wmain(int argc,wchar_t **argv){
  file=CreateFileW((dir/L"next").c_str(),GENERIC_WRITE,0,nullptr,CREATE_NEW,FILE_ATTRIBUTE_NORMAL,nullptr);assert(file!=INVALID_HANDLE_VALUE&&CloseHandle(file));
  assert(MoveFileW((dir/L"next").c_str(),(dir/L"staged").c_str()));assert(MoveFileExW((dir/L"staged").c_str(),(dir/L"next").c_str(),0));
  assert(ReplaceFileW((dir/L"session").c_str(),(dir/L"next").c_str(),(dir/L"backup").c_str(),0,nullptr,nullptr));assert(DeleteFileW((dir/L"backup").c_str()));
+ assert(CreateDirectoryW((dir/L"temporary").c_str(),nullptr));assert(RemoveDirectoryW((dir/L"temporary").c_str()));
  auto report=license_io_probe::finish();assert(report["ok"]&&report["dropped"]==0&&report["openFileHandles"]==0&&report["openFindHandles"]==0);
- bool opened=false,closed=false,enumerated=false,closedSearch=false,attrs=false,moved=false,movedEx=false,replaced=false,deleted=false;
- for(auto &event:report["events"]){auto op=event["operation"].get<std::string>();assert(event.value("path",std::string())!="outside");if(op=="CreateFileW"&&event.value("path",std::string())=="session")opened=true;if(op=="CloseHandle"&&event.value("path",std::string())=="session")closed=true;if(op=="FindFirstFileExW")enumerated=true;if(op=="FindClose")closedSearch=true;if(op=="GetFileAttributesExW")attrs=true;if(op=="MoveFileW")moved=true;if(op=="MoveFileExW")movedEx=true;if(op=="ReplaceFileW")replaced=true;if(op=="DeleteFileW")deleted=true;}
- assert(opened&&closed&&enumerated&&closedSearch&&attrs&&moved&&movedEx&&replaced&&deleted);return 0;
+ bool opened=false,closed=false,enumerated=false,closedSearch=false,attrs=false,moved=false,movedEx=false,replaced=false,deleted=false,madeDir=false,removedDir=false;
+ for(auto &event:report["events"]){auto op=event["operation"].get<std::string>();assert(event.value("path",std::string())!="outside");if(op=="CreateFileW"&&event.value("path",std::string())=="session")opened=true;if(op=="CloseHandle"&&event.value("path",std::string())=="session")closed=true;if(op=="FindFirstFileExW")enumerated=true;if(op=="FindClose")closedSearch=true;if(op=="GetFileAttributesExW")attrs=true;if(op=="MoveFileW")moved=true;if(op=="MoveFileExW")movedEx=true;if(op=="ReplaceFileW")replaced=true;if(op=="DeleteFileW")deleted=true;if(op=="CreateDirectoryW")madeDir=true;if(op=="RemoveDirectoryW")removedDir=true;}
+ assert(opened&&closed&&enumerated&&closedSearch&&attrs&&moved&&movedEx&&replaced&&deleted&&madeDir&&removedDir);return 0;
 }

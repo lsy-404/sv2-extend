@@ -19,6 +19,8 @@ static decltype(&FindFirstFileExW) find_ex_original;
 static decltype(&GetFileAttributesExW) attributes_ex_original;
 static decltype(&FindClose) find_close_original;
 static decltype(&CloseHandle) close_original;
+static decltype(&CreateDirectoryW) create_directory_original;
+static decltype(&RemoveDirectoryW) remove_directory_original;
 static DWORD observed_thread=0;static std::wstring root;static bool enabled=false;static thread_local bool recording=false;static json events=json::array();static unsigned dropped=0;static std::map<uintptr_t,std::wstring> files,finds;
 inline std::wstring absolute(const wchar_t *path){if(!path||!*path)return {};DWORD count=GetFullPathNameW(path,0,nullptr,nullptr);if(!count||count>32767)return {};std::wstring result(count,L'\0');DWORD written=GetFullPathNameW(path,count,result.data(),nullptr);if(!written||written>=count)return {};result.resize(written);return result;}
 inline bool relative(const wchar_t *raw,std::wstring &result){
@@ -43,6 +45,8 @@ static HANDLE WINAPI find_ex(const wchar_t *path,FINDEX_INFO_LEVELS info,LPVOID 
 static BOOL WINAPI attributes_ex(const wchar_t *path,GET_FILEEX_INFO_LEVELS level,LPVOID data){auto result=attributes_ex_original(path,level,data);auto error=GetLastError();note("GetFileAttributesExW",path,nullptr,0,result!=FALSE,error);SetLastError(error);return result;}
 static BOOL WINAPI find_close(HANDLE handle){auto result=find_close_original(handle);auto error=GetLastError();closed(handle,true,result!=FALSE,error);SetLastError(error);return result;}
 static BOOL WINAPI close_handle(HANDLE handle){auto result=close_original(handle);auto error=GetLastError();closed(handle,false,result!=FALSE,error);SetLastError(error);return result;}
+static BOOL WINAPI create_directory(const wchar_t *path,LPSECURITY_ATTRIBUTES attributes){auto result=create_directory_original(path,attributes);auto error=GetLastError();note("CreateDirectoryW",path,nullptr,0,result!=FALSE,error);SetLastError(error);return result;}
+static BOOL WINAPI remove_directory(const wchar_t *path){auto result=remove_directory_original(path);auto error=GetLastError();note("RemoveDirectoryW",path,nullptr,0,result!=FALSE,error);SetLastError(error);return result;}
 inline bool install(){
  auto module=GetModuleHandleW(L"kernel32.dll");if(!module)return false;
  struct Hook{const char *name;void *detour;void **original;};Hook hooks[]={
@@ -51,7 +55,7 @@ inline bool install(){
   {"DeleteFileW",reinterpret_cast<void*>(remove),reinterpret_cast<void**>(&delete_original)}, {"GetFileAttributesW",reinterpret_cast<void*>(attributes),reinterpret_cast<void**>(&attributes_original)},
   {"FindFirstFileW",reinterpret_cast<void*>(find),reinterpret_cast<void**>(&find_original)}, {"FindFirstFileExW",reinterpret_cast<void*>(find_ex),reinterpret_cast<void**>(&find_ex_original)},
   {"GetFileAttributesExW",reinterpret_cast<void*>(attributes_ex),reinterpret_cast<void**>(&attributes_ex_original)}, {"FindClose",reinterpret_cast<void*>(find_close),reinterpret_cast<void**>(&find_close_original)},
-  {"CloseHandle",reinterpret_cast<void*>(close_handle),reinterpret_cast<void**>(&close_original)}};
+  {"CloseHandle",reinterpret_cast<void*>(close_handle),reinterpret_cast<void**>(&close_original)}, {"CreateDirectoryW",reinterpret_cast<void*>(create_directory),reinterpret_cast<void**>(&create_directory_original)}, {"RemoveDirectoryW",reinterpret_cast<void*>(remove_directory),reinterpret_cast<void**>(&remove_directory_original)}};
  std::vector<void*> installed;
  for(const auto &hook:hooks){auto target=reinterpret_cast<void*>(GetProcAddress(module,hook.name));if(!target||MH_CreateHook(target,hook.detour,hook.original)!=MH_OK){for(auto item:installed)MH_RemoveHook(item);return false;}installed.push_back(target);}
  for(auto target:installed)if(MH_QueueEnableHook(target)!=MH_OK){for(auto item:installed)MH_RemoveHook(item);return false;}
