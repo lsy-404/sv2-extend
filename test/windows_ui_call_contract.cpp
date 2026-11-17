@@ -2,6 +2,7 @@
 #include <cassert>
 #include <thread>
 #include <iostream>
+namespace editor_gate {bool version_matches(){return false;}}
 using native_panel::json;
 static int owner=0,settings_events=0,action_events=0;static bool reenter=false;
 static void event(const char *raw,void *ctx){auto v=json::parse(raw);if(v["kind"]=="settings"){++settings_events;if(reenter)assert(native_panel::update_ui("test.plugin",R"({"status":"callback"})",ctx)==LOADER_OK);}else if(v["kind"]=="action"){++action_events;if(reenter)assert(native_panel::unregister_ui("test.plugin",ctx)==LOADER_OK);}}
@@ -11,6 +12,7 @@ int main(){
  auto output=std::filesystem::absolute(L"test/.outputs");std::filesystem::create_directories(output);auto root=output/(L"sv2-ui-call-test-"+std::to_wstring(GetCurrentProcessId()));assert(!std::filesystem::exists(root));assert(std::filesystem::create_directory(root));assert(native_panel::install(GetDesktopWindow(),root.c_str())==LOADER_OK);
  json d={{"id","test.plugin"},{"name","Test"},{"version","1"},{"status","ready"},{"sidebar",{{"title","Test"},{"rows",json::array({{{"type","button"},{"id","refresh"},{"text","Refresh"}}})}}},{"settings",json::array({{{"key","enabled"},{"title","Enabled"},{"type","boolean"},{"default",true}},{{"key","count"},{"title","Count"},{"type","integer"},{"minimum",0},{"maximum",5},{"default",1}}})}};
  assert(native_panel::register_ui(d.dump().c_str(),event,&owner)==LOADER_OK);assert(settings_events==1);auto original=snap();
+ assert(original["extendEntryVisible"]==true);assert(native_panel::set_visibility("opensv2.extend",false));assert(snap()["extendEntryVisible"]==false);assert(native_panel::set_visibility("opensv2.extend",true));original=snap();
  auto stale=native_panel::call("ui.set_visible",{{"id","test.plugin"},{"generation",0},{"visible",false}});assert(stale["error"]["code"]=="STALE_UI_GENERATION");
  assert(run("ui.set_setting",{{"key","count"},{"value",4}})["ok"]==true);auto after=snap();assert(after["plugins"][0]["values"]["count"]==4);assert(native_panel::call("ui.set_visible",{{"id","test.plugin"},{"generation",original["generation"]},{"visible",false}})["error"]["code"]=="STALE_UI_GENERATION");
  auto before=snap();assert(run("ui.set_settings",json::object())["error"]["code"]=="INVALID_ARGUMENT");assert(run("ui.set_settings",{{"settings",json::array()}})["error"]["code"]=="INVALID_ARGUMENT");assert(run("ui.set_settings",{{"settings",{{"enabled",false}}}})["error"]["code"]=="INVALID_SETTING_VALUE");assert(snap()==before);assert(run("ui.set_settings",{{"settings",{{"enabled",false},{"count",99}}}})["error"]["code"]=="INVALID_SETTING_VALUE");assert(snap()==before);assert(run("ui.set_setting",{{"key","count"},{"value",1.5}})["error"]["code"]=="INVALID_SETTING_VALUE");assert(snap()==before);

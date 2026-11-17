@@ -56,15 +56,17 @@ struct Pane {
  Pane(void *key,const char *value):identity(key),id(value),window(nullptr){}
 };
 static std::map<std::string,Plugin> plugins;
+struct ScriptsEntry { native_widgets::Button button; };
 static std::map<void*,Pane> panes;
+static std::map<void*,std::unique_ptr<ScriptsEntry>> scripts_entries;
 static HWND dispatcher=nullptr,host=nullptr;
 static DWORD thread_id=0;
 static std::filesystem::path preference_file,diagnostic_file;
 static std::string last_diagnostic;
 static json preferences=json::object(),visibility=json::object(),preference_document=json::object();
-static bool preferences_writable=false;
+static bool preferences_writable=false,restore_pending=false;
+static bool (*categories_changed)()=nullptr;
 static uint64_t generation=1;
-static void (*categories_changed)()=nullptr;
 static int (*open_category)(const char*)=nullptr;
 static std::wstring wide(const std::string &s) {
  int n=MultiByteToWideChar(CP_UTF8,MB_ERR_INVALID_CHARS,s.data(),(int)s.size(),nullptr,0);
@@ -87,6 +89,7 @@ static bool valid(const json &d) {
  std::set<std::string> ids;
  for(auto &r:d["sidebar"]["rows"]) {if(!r.is_object()||!r.contains("type")||!r["type"].is_string()||!r.contains("text")||!text(r["text"],512))return false; auto t=r["type"].get<std::string>(); if(t=="label")continue; if(t!="button"||!r.contains("id")||!name(r["id"])||!ids.insert(r["id"].get<std::string>()).second)return false;}
  ids.clear(); for(auto &f:d["settings"]) {if(!f.is_object()||!f.contains("key")||!name(f["key"])||!ids.insert(f["key"].get<std::string>()).second||!f.contains("title")||!text(f["title"],128)||!f.contains("type")||!f["type"].is_string()||!f.contains("default"))return false;
+ if((f.contains("section")&&!text(f["section"],128))||(f.contains("detail")&&!text(f["detail"],512)))return false;
  if(f["type"]=="choice") {if(!f.contains("choices")||!f["choices"].is_array()||f["choices"].empty()||f["choices"].size()>32)return false;for(auto &c:f["choices"])if(!text(c,256))return false;}
  if(!field_value(f,f["default"]))return false; } return true;
 }
@@ -99,10 +102,10 @@ static bool save_state(const json &next,const json &next_visibility) {
 static bool save_values(const std::string &id,const json &values){auto next=preferences;next[id]=values;return save_state(next,visibility);}
 static void notify(const std::string &id,const json &event) {auto it=plugins.find(id);if(it==plugins.end()||!it->second.event)return; auto callback=it->second.event;auto owner=it->second.owner;std::string body=event.dump();callback(body.c_str(),owner);}
 [[maybe_unused]] static std::vector<Category> categories(){std::vector<Category> result;for(const auto &p:plugins)result.push_back({p.first,p.second.descriptor["name"].get<std::string>(),!visibility.contains(p.first)||!visibility[p.first].is_boolean()||visibility[p.first].get<bool>()});return result;}
-[[maybe_unused]] static void set_categories_changed(void(*callback)()){categories_changed=callback;}
+[[maybe_unused]] static void set_categories_changed(bool(*callback)()){categories_changed=callback;}
 [[maybe_unused]] static void set_open_category(int(*callback)(const char*)){open_category=callback;}
 
-static bool owned(void *pane){if(panes.count(pane))return true;for(auto &item:panes)if(item.second.content.object==pane)return true;return false;}
+static bool owned(void *pane){if(panes.count(pane)||scripts_entries.count(pane))return true;for(auto &item:panes)if(item.second.content.object==pane)return true;return false;}
 static bool owns_child(void *pane,void *child){auto found=panes.find(pane);if(found==panes.end())return false;return found->second.viewport.object==child;}
 static void enqueue(void *context){auto control=static_cast<Control*>(context);if(control->pending<1024)++control->pending;if(dispatcher)PostMessageW(dispatcher,WM_APP+2,0,0);}
 static bool create(Pane &pane,Control &c,const json &field){
@@ -131,12 +134,13 @@ static bool reconcile(Pane &pane){
   }
  };
  if(pane.id.empty()){
+  add("extend/visible","opensv2.extend","visible","visible",u8"\u663e\u793a Extend \u5165\u53e3",!visibility.contains("opensv2.extend")||visibility["opensv2.extend"].get<bool>());
   for(const auto &item:plugins){auto &id=item.first;auto &plugin=item.second;add(id+"/title",id,"title","label",plugin.descriptor["name"],json());for(const auto &field:plugin.descriptor["settings"])if(field["key"]=="enabled"&&field["type"]=="boolean")add(id+"/enabled",id,"enabled","boolean",u8"启用插件",plugin.values["enabled"],field);bool visible=!visibility.contains(id)||visibility[id].get<bool>();add(id+"/visible",id,"visible","visible",u8"\u663e\u793a\u53f3\u4fa7\u9762\u677f\u5165\u53e3",visible);add(id+"/open",id,"open","open",u8"\u6253\u5f00\u63d2\u4ef6\u9762\u677f",json());}
  }else {
   auto found=plugins.find(pane.id);if(found!=plugins.end()){auto &plugin=found->second;
    add("title",pane.id,"title","label",plugin.descriptor["sidebar"]["title"],json());add("status",pane.id,"status","label",plugin.descriptor["status"],json());
    size_t index=0;for(const auto &row:plugin.descriptor["sidebar"]["rows"]){auto type=row["type"].get<std::string>();auto key=type=="button"?row["id"].get<std::string>():std::to_string(index);add("row/"+type+"/"+key,pane.id,key,type=="button"?"action":"label",row["text"],json());++index;}
-   for(const auto &field:plugin.descriptor["settings"]){auto key=field["key"].get<std::string>(),type=field["type"].get<std::string>();if(type!="boolean")add("caption/"+key,pane.id,key,"label",field["title"],json());add("setting/"+key,pane.id,key,type,field["title"],plugin.values[key],field);}
+   std::string section;for(const auto &field:plugin.descriptor["settings"]){auto key=field["key"].get<std::string>(),type=field["type"].get<std::string>();if(field.contains("section")){auto next=field["section"].get<std::string>();if(next!=section){section=next;add("section/"+key,pane.id,key,"label",section,json());}}if(type!="boolean")add("caption/"+key,pane.id,key,"label",field["title"],json());add("setting/"+key,pane.id,key,type,field["title"],plugin.values[key],field);if(field.contains("detail"))add("detail/"+key,pane.id,key,"label",field["detail"],json());}
   }
  }
  for(auto it=pane.controls.begin();it!=pane.controls.end();){if(!wanted.count(it->first)){if(it->second->destroy())it=pane.controls.erase(it);else{ok=false;++it;}}else ++it;}
@@ -183,8 +187,11 @@ static void commit_value(const std::string &plugin,const std::string &key,const 
   else {if(c.value!=value){if(type=="boolean"||type=="visible")native_widget_listener::set_toggle(c.toggle.listener,value.get<bool>());else if(type=="text"||type=="integer"){auto text=type=="text"?value.get<std::string>():value.dump();c.textbox.set_text(text.c_str());c.observed=text;c.edited_at=0;}else if(type=="choice"){auto p=plugins.find(plugin);if(p!=plugins.end())for(auto &f:p->second.descriptor["settings"])if(f["key"]==key)for(size_t i=0;i<f["choices"].size();++i)if(f["choices"][i]==value)c.choice.set((int)i);}}c.value=value;}
  }
 }
+static bool extend_visible();
+static bool set_visibility(const std::string &id,bool value){auto old=visibility;auto next=visibility;next[id]=value;visibility=next;if(categories_changed&&!categories_changed()){visibility=old;categories_changed();return false;}if(!save_state(preferences,next)){visibility=old;if(categories_changed)categories_changed();return false;}return true;}
 static void drain(){
  if(GetCurrentThreadId()!=thread_id)return;
+ if(restore_pending){restore_pending=false;if(extend_visible()||set_visibility("opensv2.extend",true)){commit_value("opensv2.extend","visible","visible",true,false);for(auto &pane:panes)for(auto &item:pane.second.controls){auto &c=*item.second;if(c.plugin=="opensv2.extend"&&c.type=="visible")native_widget_listener::set_toggle(c.toggle.listener,true);}if(open_category)open_category("");}}
  struct Event {std::string plugin,key,type;json value;};std::vector<Event> events;auto now=GetTickCount64();
  for(auto &pane:panes)for(auto &item:pane.second.controls){auto &control=*item.second;if(!control.component())continue;bool changed=false;json value;
   if(control.type=="action"||control.type=="open"){while(control.pending){--control.pending;events.push_back({control.plugin,control.key,control.type,json()});}continue;}
@@ -195,10 +202,10 @@ static void drain(){
   }
   if(changed){events.push_back({control.plugin,control.key,control.type,value});}
  }
- for(auto &event:events){auto found=plugins.find(event.plugin);if(found==plugins.end())continue;
+ for(auto &event:events){if(event.plugin=="opensv2.extend"&&event.type=="visible"){if(set_visibility(event.plugin,event.value.get<bool>()))commit_value(event.plugin,event.key,event.type,event.value,false);else commit_value(event.plugin,event.key,event.type,event.value,true);continue;}auto found=plugins.find(event.plugin);if(found==plugins.end())continue;
   if(event.type=="action"){notify(event.plugin,{{"kind","action"},{"action",event.key}});continue;}
   if(event.type=="open"){if(open_category)open_category(event.plugin.c_str());continue;}
-  if(event.type=="visible"){auto next=visibility;next[event.plugin]=event.value;if(save_state(preferences,next)){commit_value(event.plugin,event.key,event.type,event.value,false);if(categories_changed)categories_changed();refresh_plugin(event.plugin,true);}else commit_value(event.plugin,event.key,event.type,event.value,true);continue;}
+  if(event.type=="visible"){if(set_visibility(event.plugin,event.value.get<bool>())){commit_value(event.plugin,event.key,event.type,event.value,false);refresh_plugin(event.plugin,true);}else commit_value(event.plugin,event.key,event.type,event.value,true);continue;}
   for(const auto &field:found->second.descriptor["settings"])if(field["key"]==event.key&&field_value(field,event.value)){auto values=found->second.values;values[event.key]=event.value;if(save_values(event.plugin,values)){found->second.values=values;commit_value(event.plugin,event.key,event.type,event.value,false);notify(event.plugin,{{"kind","settings"},{"settings",values}});}else commit_value(event.plugin,event.key,event.type,event.value,true);break;}
  }
 }
@@ -213,15 +220,23 @@ static void diagnostic(){
  auto &pane=found->second;if(pane.id!=id||pane.window!=window)return false;pane.bounds=bounds;pane.visible=visible;layout(pane);diagnostic();return pane.ready;
 }
 [[maybe_unused]] static void dock_remove(void *identity){if(GetCurrentThreadId()!=thread_id)return;auto found=panes.find(identity);if(found==panes.end())return;bool ok=true;for(auto &item:found->second.controls)if(!item.second->destroy())ok=false;if(ok)ok=found->second.viewport.destroy()&&found->second.content.destroy();if(ok)panes.erase(found);diagnostic();}
+static bool extend_visible(){return !visibility.contains("opensv2.extend")||visibility["opensv2.extend"].get<bool>();}
+static void restore_extend(void *){restore_pending=true;if(dispatcher)PostMessageW(dispatcher,WM_APP+2,0,0);}
+static void scripts_update(void *pane,const RECT &bounds,bool showing){
+ if(GetCurrentThreadId()!=thread_id||!pane)return;auto found=scripts_entries.find(pane);if(found==scripts_entries.end()){auto entry=std::make_unique<ScriptsEntry>();auto raw=entry.get();scripts_entries.emplace(pane,std::move(entry));if(!raw->button.create(pane,owned,thread_id,u8"\u6253\u5f00 Extend \u83dc\u5355",restore_extend,nullptr)){if(raw->button.destroy())scripts_entries.erase(pane);return;}found=scripts_entries.find(pane);}
+ int width=bounds.right-bounds.left,height=bounds.bottom-bounds.top;if(width<24||height<40||!showing){auto child=found->second->button.component();if(child)reinterpret_cast<void(*)(void*,bool)>(reinterpret_cast<unsigned char*>(GetModuleHandleW(nullptr))+0xc4e5b0)(child,false);return;}
+ auto image=reinterpret_cast<unsigned char*>(GetModuleHandleW(nullptr));reinterpret_cast<void(*)(void*,int,int,int,int)>(image+0xc4f6f0)(static_cast<unsigned char*>(pane)+0x158,bounds.left,bounds.top,width,height-36);found->second->button.layout(bounds.left+12,bounds.bottom-30,width-24,24);
+}
+static void scripts_remove(void *pane){auto found=scripts_entries.find(pane);if(found!=scripts_entries.end()&&found->second->button.destroy())scripts_entries.erase(found);}
 static BOOL CALLBACK find_host(HWND w,LPARAM result){if(!IsWindowVisible(w)||GetWindow(w,GW_OWNER)||(GetWindowLongPtrW(w,GWL_EXSTYLE)&WS_EX_TOOLWINDOW))return TRUE;wchar_t name[256]{};if(!GetClassNameW(w,name,256)||wcsncmp(name,L"JUCE_",5)!=0)return TRUE;auto style=GetWindowLongPtrW(w,GWL_STYLE);RECT rect{};GetClientRect(w,&rect);if(!(style&WS_THICKFRAME)||!(style&WS_SYSMENU)||rect.right<400||rect.bottom<300)return TRUE;*reinterpret_cast<HWND*>(result)=w;return FALSE;}
 static int install(HWND window,const wchar_t *profile_root){if(!window||!profile_root||!*profile_root)return LOADER_ERR_INVALID;dispatcher=window;thread_id=GetCurrentThreadId();diagnostic_file=std::filesystem::path(profile_root)/L"outputs"/L"windows-panel.json";std::filesystem::path dir=std::filesystem::path(profile_root)/L"preferences";std::error_code ec;std::filesystem::create_directories(dir,ec);preference_file=dir/L"windows-plugin-ui.json";
  if(!ec){DWORD attr=GetFileAttributesW(preference_file.c_str());if(attr!=INVALID_FILE_ATTRIBUTES&&(attr&(FILE_ATTRIBUTE_REPARSE_POINT|FILE_ATTRIBUTE_DIRECTORY)))return LOADER_ERR_INVALID;auto size=std::filesystem::file_size(preference_file,ec);if(ec==std::errc::no_such_file_or_directory){ec.clear();preferences_writable=true;}else if(!ec&&size<=262144){std::ifstream input(preference_file,std::ios::binary);json saved=json::parse(input,nullptr,false);if(saved.is_object()&&saved.contains("schema")&&saved["schema"].is_number_integer()&&saved["schema"]==1&&saved.contains("plugins")&&saved["plugins"].is_object()&&saved["plugins"].size()<=128){preference_document=saved;preferences=saved["plugins"];if(saved.contains("categoryVisibility")){if(!saved["categoryVisibility"].is_object())return LOADER_ERR_INVALID;for(auto it=saved["categoryVisibility"].begin();it!=saved["categoryVisibility"].end();++it)if(!it.value().is_boolean())return LOADER_ERR_INVALID;visibility=saved["categoryVisibility"]; }preferences_writable=true;}}}
  return LOADER_OK;}
-static int register_ui(const char *raw,loader_plugin_ui_event event,void *owner){if(GetCurrentThreadId()!=thread_id)return LOADER_ERR_INVALID;json d=parse(raw);if(!valid(d)||plugins.size()>=32)return LOADER_ERR_INVALID;std::string id=d["id"];if(plugins.count(id))return LOADER_ERR_INVALID;json values=json::object();for(auto &f:d["settings"]){std::string key=f["key"];json value=f["default"];if(preferences.contains(id)&&preferences[id].is_object()&&preferences[id].contains(key)&&field_value(f,preferences[id][key]))value=preferences[id][key];values[key]=value;}plugins.emplace(id,Plugin{d,values,event,owner});++generation;refresh_plugin(id,true);if(categories_changed)categories_changed();notify(id,json{{"kind","settings"},{"settings",values}});return LOADER_OK;}
+static int register_ui(const char *raw,loader_plugin_ui_event event,void *owner){if(GetCurrentThreadId()!=thread_id)return LOADER_ERR_INVALID;json d=parse(raw);if(!valid(d)||plugins.size()>=32)return LOADER_ERR_INVALID;std::string id=d["id"];if(id=="opensv2.extend"||plugins.count(id))return LOADER_ERR_INVALID;json values=json::object();for(auto &f:d["settings"]){std::string key=f["key"];json value=f["default"];if(preferences.contains(id)&&preferences[id].is_object()&&preferences[id].contains(key)&&field_value(f,preferences[id][key]))value=preferences[id][key];values[key]=value;}plugins.emplace(id,Plugin{d,values,event,owner});++generation;refresh_plugin(id,true);if(categories_changed)categories_changed();notify(id,json{{"kind","settings"},{"settings",values}});return LOADER_OK;}
 static int unregister_ui(const char *raw,void *owner){if(GetCurrentThreadId()!=thread_id||!raw)return LOADER_ERR_INVALID;auto it=plugins.find(raw);if(it==plugins.end()||it->second.owner!=owner)return LOADER_ERR_INVALID;std::string id=it->first;plugins.erase(it);++generation;refresh_plugin(id,true);if(categories_changed)categories_changed();return LOADER_OK;}
 static int update_ui(const char *raw,const char *body,void *owner){if(GetCurrentThreadId()!=thread_id||!raw)return LOADER_ERR_INVALID;auto it=plugins.find(raw);json state=parse(body);if(it==plugins.end()||it->second.owner!=owner||!state.is_object())return LOADER_ERR_INVALID;json next=it->second.descriptor;for(auto i=state.begin();i!=state.end();++i){if(i.key()!="status"&&i.key()!="sidebar"&&i.key()!="settings")return LOADER_ERR_INVALID;next[i.key()]=i.value();}if(!valid(next))return LOADER_ERR_INVALID;if(next==it->second.descriptor)return LOADER_OK;auto old_values=it->second.values;json values=json::object();for(const auto &field:next["settings"]){auto key=field["key"].get<std::string>();values[key]=old_values.contains(key)&&field_value(field,old_values[key])?old_values[key]:field["default"];}it->second.descriptor=next;it->second.values=values;++generation;refresh_plugin(raw,true);for(const auto &field:next["settings"]){auto key=field["key"].get<std::string>();commit_value(raw,key,field["type"],values[key],false);}if(values!=old_values)notify(raw,{{"kind","settings"},{"settings",values}});return LOADER_OK;}
 
-static json snapshot(){json items=json::array();for(auto &entry:plugins){auto item=entry.second.descriptor;item["visible"]=!visibility.contains(entry.first)||visibility[entry.first].get<bool>();item["values"]=entry.second.values;items.push_back(std::move(item));}return {{"generation",generation},{"plugins",items},{"canPersist",preferences_writable},{"persistenceError",preferences_writable?"":"UI_STORAGE_UNAVAILABLE"},{"hostPid",GetCurrentProcessId()},{"extendEntryVisible",true},{"manager",{{"status","Native packages are installed through the Windows installer."},{"installAvailable",false},{"updateAvailable",false}}}};}
+static json snapshot(){json items=json::array();for(auto &entry:plugins){auto item=entry.second.descriptor;item["visible"]=!visibility.contains(entry.first)||visibility[entry.first].get<bool>();item["values"]=entry.second.values;items.push_back(std::move(item));}return {{"generation",generation},{"plugins",items},{"canPersist",preferences_writable},{"persistenceError",preferences_writable?"":"UI_STORAGE_UNAVAILABLE"},{"hostPid",GetCurrentProcessId()},{"extendEntryVisible",extend_visible()},{"manager",{{"status","Native packages are installed through the Windows installer."},{"installAvailable",false},{"updateAvailable",false}}}};}
 static json call(const std::string &method,const json &args){
  auto fail=[](const char *code){return json{{"ok",false},{"error",{{"code",code}}}};};auto success=[](){return json{{"ok",true},{"result",snapshot()}};};
  if(GetCurrentThreadId()!=thread_id)return fail("MAIN_THREAD_REQUIRED");if(!args.is_object())return fail("INVALID_ARGUMENT");
@@ -234,7 +249,7 @@ static json call(const std::string &method,const json &args){
   if(!available||!found->second.event)return fail("UI_ACTION_UNAVAILABLE");notify(id,{{"kind","action"},{"action",args["action"]}});return success();
  }
  if(method=="ui.set_visible"){
-  if(args.size()!=3||!args.contains("visible")||!args["visible"].is_boolean())return fail("INVALID_ARGUMENT");auto next=visibility;next[id]=args["visible"];if(!save_state(preferences,next))return fail("UI_PREFERENCES_WRITE_FAILED");commit_value(id,"visible","visible",args["visible"],false);if(categories_changed)categories_changed();refresh_plugin(id,true);return success();
+  if(args.size()!=3||!args.contains("visible")||!args["visible"].is_boolean())return fail("INVALID_ARGUMENT");if(!set_visibility(id,args["visible"].get<bool>()))return fail("UI_PREFERENCES_WRITE_FAILED");commit_value(id,"visible","visible",args["visible"],false);refresh_plugin(id,true);return success();
  }
  auto values=found->second.values;
  if(method=="ui.set_setting"){

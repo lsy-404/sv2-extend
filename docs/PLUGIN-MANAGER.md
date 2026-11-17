@@ -29,4 +29,4 @@ Lua 与 JS 各有独立的函数开关，包括工程声库清单。MCP 工具�
 
 持久启动联网 guard 用于崩溃恢复时在下一次宿主 main 前请求阻断。损坏或不安全的策略文件按阻断处理；它不等于完整联网隔离验证。
 
-上述宿主内队列安装器目前为 macOS 后端。Windows 使用 `loader/windows/install.ps1 -PluginPackage` 在宿主退出后安装原生包，保留升级备份；宿主内下载、排队更新与独立插件删除尚未适配。Windows 设置持久化在 profile，侧栏展开时覆盖右侧区域，收起后恢复工作区。Settings Probe 是开发诊断 fixture，不随正式安装注册为插件。
+上述宿主内队列安装器目前为 macOS 后端。Windows 使用 `loader/windows/install.ps1 -PluginPackage` 在宿主退出后安装原生包，保留升级备份；宿主内下载、排队更新与独立插件删除尚未适配。Windows 设置持久化在 profile，插件面板通过宿主原生分类停靠。Settings Probe 是开发诊断 fixture，不随正式安装注册为插件。
