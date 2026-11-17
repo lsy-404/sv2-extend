@@ -1,3 +1,4 @@
+#include "../loader/windows/windows_socket_gate.h"
 #include "../loader/windows/windows_webview_gate.h"
 #include <cstdio>
 #include <string>
@@ -39,16 +40,16 @@ static bool wait(bool &done){auto deadline=GetTickCount64()+15000;while(!done&&G
 static bool evaluate(PCWSTR expression,const wchar_t *expected){script_done=false;auto callback=new ScriptHandler;auto table=*reinterpret_cast<void***>(web);HRESULT result=reinterpret_cast<HRESULT(WINAPI*)(IUnknown*,PCWSTR,IUnknown*)>(table[29])(web,expression,callback);callback->Release();return SUCCEEDED(result)&&wait(script_done)&&SUCCEEDED(script_result)&&script_value==expected;}
 static bool capture(){IStream *stream=nullptr;if(FAILED(CreateStreamOnHGlobal(nullptr,TRUE,&stream)))return false;capture_done=false;auto handler=new CaptureHandler;auto table=*reinterpret_cast<void***>(web);HRESULT result=reinterpret_cast<HRESULT(WINAPI*)(IUnknown*,int,IStream*,IUnknown*)>(table[30])(web,0,stream,handler);handler->Release();STATSTG stats{};bool ok=SUCCEEDED(result)&&wait(capture_done)&&SUCCEEDED(capture_result)&&SUCCEEDED(stream->Stat(&stats,STATFLAG_NONAME))&&stats.cbSize.QuadPart>100;stream->Release();return ok;}
 int wmain(int argc,wchar_t **argv){
- if(argc!=4)return 2;bool retire_old=!wcscmp(argv[3],L"retire");if(!retire_old&&wcscmp(argv[3],L"preserve"))return 2;
- if(FAILED(CoInitializeEx(nullptr,COINIT_APARTMENTTHREADED))||MH_Initialize()!=MH_OK||!install())return 3;
+ if(argc!=4)return 2;bool retire_old=!wcscmp(argv[3],L"retire"),cold=!wcscmp(argv[3],L"cold");if(!retire_old&&!cold&&wcscmp(argv[3],L"preserve"))return 2;
+ if(FAILED(CoInitializeEx(nullptr,COINIT_APARTMENTTHREADED))||MH_Initialize()!=MH_OK||!windows_socket_gate::install()||!windows_child_gate::install()||!install(std::filesystem::path(argv[2]).parent_path()))return 3;
  HMODULE runtime=LoadLibraryExW(argv[1],nullptr,LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR|LOAD_LIBRARY_SEARCH_DEFAULT_DIRS);if(!runtime)return 4;
  auto create=reinterpret_cast<Factory>(GetProcAddress(runtime,"CreateWebViewEnvironmentWithOptionsInternal"));if(!create)return 5;
  window_handle=CreateWindowExW(0,L"STATIC",L"",WS_OVERLAPPEDWINDOW,0,0,400,300,nullptr,nullptr,GetModuleHandleW(nullptr),nullptr);if(!window_handle)return 6;ShowWindow(window_handle,SW_SHOW);
- setblocked(false);auto handler=new Handler(true);HRESULT started=create(false,0,argv[2],nullptr,handler);handler->Release();if(FAILED(started)||!wait(controller_done)||FAILED(controller_result)||!web)return 7;
+ windows_child_gate::setblocked(cold);if(!windows_socket_gate::setblocked(cold))return 3;setblocked(cold);auto handler=new Handler(true);HRESULT started=create(false,0,argv[2],nullptr,handler);handler->Release();bool completed=SUCCEEDED(started)&&wait(controller_done);if(!completed||FAILED(controller_result)||!web){std::printf("start=%08lx completed=%d controller=%08lx child_denied=%llu\n",(unsigned long)started,completed,(unsigned long)controller_result,windows_child_gate::state().denied);return 7;}
  auto table=*reinterpret_cast<void***>(web);if(FAILED(reinterpret_cast<HRESULT(WINAPI*)(IUnknown*,PCWSTR)>(table[6])(web,L"<!doctype html><button id='b' onclick='this.textContent=Number(this.textContent)+1'>0</button>")))return 8;
  bool loaded=false;for(int i=0;i<100&&!loaded;++i){loaded=evaluate(L"document.getElementById('b') && document.getElementById('b').textContent",L"\"0\"");if(!loaded)Sleep(50);}if(!loaded||!evaluate(L"b.click();b.textContent",L"\"1\"")||!capture())return 9;
  auto original=controller;setblocked(true);if(retire_old&&!retire())return 10;
- bool offline=controller==original&&evaluate(L"b.click();b.textContent",L"\"2\"")&&capture();setblocked(false);
+ bool offline=controller==original&&evaluate(L"b.click();b.textContent",L"\"2\"")&&capture();windows_child_gate::setblocked(false);windows_socket_gate::setblocked(false);setblocked(false);
  bool online=controller==original&&evaluate(L"b.click();b.textContent",L"\"3\"")&&capture();
  std::printf("same_controller=%d offline_dom=%d online_dom=%d retired=%d\n",controller==original,offline,online,retire_old);std::fflush(stdout);
  if(!retire_old)reinterpret_cast<ControllerClose>((*reinterpret_cast<void***>(controller))[24])(controller);web->Release();controller->Release();DestroyWindow(window_handle);return offline&&online?0:11;
