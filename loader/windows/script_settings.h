@@ -34,8 +34,8 @@ inline bool enabled(const Runtime &runtime,const std::string &key){auto it=runti
 inline const char *denial(const Runtime &runtime,const std::string &method,const json &args){
  if(method.rfind("editor.",0)==0||method.rfind("ui.",0)==0||method=="runtime.info"||method=="call.result"||method=="voice.native_status"||method=="voice.catalog"||method=="voice.capture.begin"||method=="voice.capture.end"||method=="voice.select.begin"||method=="voice.select.validate"||method=="voice.select.end"||method=="export.capture.begin"||method=="export.capture.end"||method=="notes.native_status"||method=="groups.native_status"||method=="export.native_status")return nullptr;
  std::string target=method;if(method=="call.submit"&&args.is_object()&&args.contains("method")&&args["method"].is_string())target=args["method"].get<std::string>();
- if(target=="http.status"||target=="http.cancel"||target=="exports.status"||target=="exports.cancel"||target=="export.status"||target=="export.cancel")return nullptr;
- if(!enabled(runtime,"enabled"))return "EXTENSION_DISABLED";
+ bool finishing=target=="http.status"||target=="http.cancel"||target=="exports.status"||target=="exports.cancel"||target=="export.status"||target=="export.cancel";
+ if(!finishing&&!enabled(runtime,"enabled"))return "EXTENSION_DISABLED";
  if(target.rfind("voice.",0)==0)target="voicebanks."+target.substr(6);else if(target.rfind("export.",0)==0)target="exports."+target.substr(7);
  return enabled(runtime,target)?nullptr:"FEATURE_DISABLED";
 }

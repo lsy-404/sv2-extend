@@ -8,6 +8,14 @@ if noteStatus and noteStatus.removable then methods[#methods+1]='notes.remove' e
 local groupStatus=extend.request('groups.native_status', {})
 if groupStatus and groupStatus.available then methods[#methods+1]='groups.create';methods[#methods+1]='groups.remove' end
 local voiceStatus=extend.request('voice.native_status', {})
+if voiceStatus and voiceStatus.probeAvailable and not voiceStatus.identityReadable then
+  local scope=extend.request('voice.capture.begin', {})
+  if scope then
+    pcall(function() local reference=SV:getMainEditor():getCurrentGroup();if reference then reference:getVoice() end end)
+    extend.request('voice.capture.end', {token=scope.token})
+    voiceStatus=extend.request('voice.native_status', {})
+  end
+end
 local nativeVoice=voiceStatus and voiceStatus.identityReadable
 if nativeVoice then methods[#methods+1]='voicebanks.current' end
 if voiceStatus and voiceStatus.catalogReadable then methods[#methods+1]='voicebanks.list' end

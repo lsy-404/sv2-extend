@@ -17,10 +17,20 @@
 #include "data_namespace.h"
 #include "editor_gate.h"
 #include "editor_autostart.h"
+#include "script_runtime.h"
+#include "script_settings.h"
+#include "javascript_gate.h"
+#include "javascript_bundle.h"
+#include "plugin_storage.h"
+#include "voice_service.h"
 using json=nlohmann::json;namespace fs=std::filesystem;
 namespace {
 DWORD main_thread;HWND dispatcher;loader_api_v1 api{};std::string executable,host_directory;fs::path root;json package_results=json::array();bool managed=false,app_container=false;
 std::vector<HMODULE> modules;
+std::unique_ptr<script_runtime::Service> script_service;
+std::unique_ptr<voice_service::Service> native_voice;
+script_settings::Runtime lua_runtime{&api,"opensv2.lua-extend","Lua Extend",false},js_runtime{&api,"opensv2.javascript-extend","JS Extend",false};
+uint64_t capability_generation=1;
 std::unique_ptr<editor_lua::Service> editor_service;int editor_gate_result=LOADER_ERR_NOT_SUPPORTED,editor_start_result=LOADER_ERR_NOT_SUPPORTED;
 bool editor_online(){return editor_service&&!editor_service->epoch.empty()&&GetTickCount64()-editor_service->heartbeat<=2000;}
 void log_message(const char *);
@@ -61,13 +71,25 @@ int register_provider(const char *id,loader_editor_dispatch dispatch,void *owner
   std::set<std::string> names;for(const auto &pair:providers)if(pair.second.descriptor.contains("tools"))for(const auto &tool:pair.second.descriptor["tools"])names.insert(tool["name"].get<std::string>());
   for(const auto &tool:value["tools"]){if(!tool.is_object()||!tool.contains("name")||!tool["name"].is_string()||!tool.contains("method")||!tool["method"].is_string()||!tool.contains("description")||!tool["description"].is_string()||!tool.contains("inputSchema")||!tool["inputSchema"].is_object()||!tool["inputSchema"].contains("type")||tool["inputSchema"]["type"]!="object")return LOADER_ERR_INVALID;auto name=tool["name"].get<std::string>();if(name.rfind("svext_",0)!=0||!id_valid(name)||!names.insert(name).second||!candidate.methods.count(tool["method"].get<std::string>()))return LOADER_ERR_INVALID;}
  }
- providers.emplace(id,std::move(candidate));return LOADER_OK;
+ providers.emplace(id,std::move(candidate));++capability_generation;return LOADER_OK;
 }
-int unregister_provider(const char *id,void *owner){if(!on_main()||!id)return LOADER_ERR_INVALID;auto found=providers.find(id);if(found==providers.end()||found->second.owner!=owner)return LOADER_ERR_INVALID;providers.erase(found);std::vector<Request*> pending;{std::lock_guard<std::mutex> guard(requests_mutex);for(auto &r:requests)if(r->provider==id&&!r->delivered)pending.push_back(r.get());}for(auto r:pending)error(r,"PROVIDER_REMOVED");return 0;}
+int unregister_provider(const char *id,void *owner){if(!on_main()||!id)return LOADER_ERR_INVALID;auto found=providers.find(id);if(found==providers.end()||found->second.owner!=owner)return LOADER_ERR_INVALID;providers.erase(found);++capability_generation;std::vector<Request*> pending;{std::lock_guard<std::mutex> guard(requests_mutex);for(auto &r:requests)if(r->provider==id&&!r->delivered)pending.push_back(r.get());}for(auto r:pending)error(r,"PROVIDER_REMOVED");return 0;}
+json capability_snapshot(){json methods=json::array(),tools=json::array();for(auto &entry:providers){for(auto &method:entry.second.methods)methods.push_back(method);if(entry.second.descriptor.contains("tools"))for(auto &tool:entry.second.descriptor["tools"])tools.push_back(tool);}return {{"methods",methods},{"tools",tools},{"capabilityGeneration",capability_generation}};}
+json script_call(const std::string &method,const json &args,bool javascript){
+ if(!on_main())return editor_lua::Service::fail("MAIN_THREAD_REQUIRED");if(!args.is_object())return editor_lua::Service::fail("INVALID_ARGUMENT");
+ if(const char *denied=script_settings::denial(javascript?js_runtime:lua_runtime,method,args))return editor_lua::Service::fail(denied);
+ if(method=="runtime.info")return editor_lua::Service::success({{"pid",GetCurrentProcessId()},{"mainThread",true},{"apiVersion",1},{"transport","in-process-call"},{"usesEnvironmentState",false},{"usesFilesOrPipes",false},{"javascriptNativeAvailable",javascript_gate::ready()}});
+ if(method=="runtime.capabilities")return editor_lua::Service::success(capability_snapshot());
+ if(method.rfind("voice.",0)==0&&native_voice)return native_voice->call(method,args);
+ if(method.rfind("ui.",0)==0)return native_panel::call(method,args);
+ if(method.rfind("call.",0)==0)return script_service?script_service->call(method,args):editor_lua::Service::fail("UNSUPPORTED_HOST_CAPABILITY");
+ return editor_service?editor_service->call(method,args):editor_lua::Service::fail("UNSUPPORTED_HOST_CAPABILITY");
+}
 void dispatch_request(Request *r){
  if(r->delivered)return;
  if(GetTickCount64()>=r->deadline){error(r,"TIMEOUT");return;}
  if(r->method=="runtime.info"){reply(r,json{{"ok",true},{"result",{{"hostPid",GetCurrentProcessId()},{"platform",loader_platform_key()},{"resident",true},{"editorReady",editor_online()},{"wholeHostNetworkVerified",false},{"namespaceRedirects",data_namespace::redirected.load()},{"namespaceOtherQueries",data_namespace::other.load()}}}}.dump());return;}
+ if(r->method=="runtime.capabilities"){reply(r,json{{"ok",true},{"result",capability_snapshot()}}.dump());return;}
  if(r->method=="editor.capabilities"){json list=json::array();for(auto &pair:providers)list.push_back(json{{"id",pair.first},{"capabilities",pair.second.descriptor}});reply(r,json{{"ok",true},{"result",{{"providers",list},{"editorReady",editor_online()}}}}.dump());return;}
  for(auto &pair:providers)if(pair.second.methods.count(r->method)){r->provider=pair.first;auto dispatch=pair.second.dispatch;auto owner=pair.second.owner;dispatch(r->method.c_str(),r->arguments.c_str(),provider_reply,r,owner);return;}
  error(r,"METHOD_UNAVAILABLE");
@@ -86,14 +108,14 @@ void namespace_receipt(){
  std::ofstream output(root/L"outputs"/L"windows-namespace.json",std::ios::binary|std::ios::trunc);if(!output)return;output<<json{{"mode","shell-entry-detours"},{"hostPid",GetCurrentProcessId()},{"redirectedQueries",data_namespace::redirected.load()},{"otherQueries",data_namespace::other.load()},{"lastOtherCSIDL",data_namespace::last_csidl.load()},{"lastOtherKnownId",data_namespace::last_known.load()}}.dump(2);output.close();if(output)previous=count;
 }
 void editor_receipt(){if(!managed)return;static unsigned attempts=0;static ULONGLONG attempted_at=0;auto now=GetTickCount64();auto state=editor_autostart::status();if(editor_start_result==LOADER_OK&&!state.scan_seen&&editor_autostart::root_ready()&&attempts<20&&now-attempted_at>=500){attempted_at=now;attempts++;editor_autostart::request_initial_scan();state=editor_autostart::status();}json value{{"hostPid",GetCurrentProcessId()},{"getenvGateResult",editor_gate_result},{"autostartResult",editor_start_result},{"installed",state.installed},{"scanSeen",state.scan_seen},{"runRequested",state.run_requested},{"scanAttempts",attempts},{"initialScanReason",state.initial_scan_reason},{"editorReady",editor_online()}};static std::string previous;auto body=value.dump(2);if(body==previous)return;std::ofstream output(root/L"outputs"/L"windows-editor.json",std::ios::binary|std::ios::trunc);if(!output)return;output<<body;output.close();if(output)previous=body;}
-LRESULT CALLBACK window_proc(HWND window,UINT message,WPARAM w,LPARAM l){if(message==WM_APP+2){native_panel::drain();return 0;}if(message==WM_APP+1){dispatch_request((Request*)l);return 0;}if(message==WM_TIMER){native_panel::drain();if(editor_service)editor_service->tick();std::vector<Request*> expired;{std::lock_guard<std::mutex> guard(requests_mutex);for(auto &r:requests)if(!r->delivered&&GetTickCount64()>=r->deadline)expired.push_back(r.get());}for(auto r:expired)error(r,"TIMEOUT");category_tick();namespace_receipt();editor_receipt();return 0;}return DefWindowProcW(window,message,w,l);}
+LRESULT CALLBACK window_proc(HWND window,UINT message,WPARAM w,LPARAM l){if(message==WM_APP+2){native_panel::drain();return 0;}if(message==WM_APP+1){dispatch_request((Request*)l);return 0;}if(message==WM_TIMER){native_panel::drain();if(native_voice)native_voice->tick();if(editor_service)editor_service->tick();std::vector<Request*> expired;{std::lock_guard<std::mutex> guard(requests_mutex);for(auto &r:requests)if(!r->delivered&&GetTickCount64()>=r->deadline)expired.push_back(r.get());}for(auto r:expired)error(r,"TIMEOUT");category_tick();namespace_receipt();editor_receipt();return 0;}return DefWindowProcW(window,message,w,l);}
 int network_state(loader_network_state_v1 *state){if(!state||state->abi_version!=1||state->struct_size<sizeof *state)return LOADER_ERR_INVALID;*state={1,sizeof *state,1,0,LOADER_NET_WINHTTP|LOADER_NET_WININET|LOADER_NET_WINSOCK|LOADER_NET_WEBVIEW2,0,0,0,0};return 0;}
 int verify(uint64_t generation,loader_network_state_v1 *state){int result=network_state(state);if(result)return result;return generation!=state->generation?LOADER_ERR_STALE_GENERATION:LOADER_ERR_NETWORK_UNVERIFIED;}
 int block(int){return LOADER_ERR_NOT_SUPPORTED;}int blocked(){return 0;}
 int http(const char*,loader_http_completion done,void *context){if(done)done(0,LOADER_ERR_NOT_SUPPORTED,nullptr,0,context);return LOADER_ERR_NOT_SUPPORTED;}
 int storage(const char*,const uint8_t*,size_t){return LOADER_ERR_NOT_SUPPORTED;}
-int storage_scoped(const char*,const char*,const uint8_t*,size_t){return LOADER_ERR_NOT_SUPPORTED;}
-int storage_read(const char*,const char*,uint8_t*,size_t*){return LOADER_ERR_NOT_SUPPORTED;}
+int storage_scoped(const char *id,const char *key,const uint8_t *bytes,size_t length){return plugin_storage::write(id,key,bytes,length);}
+int storage_read(const char *id,const char *key,uint8_t *bytes,size_t *length){return plugin_storage::read(id,key,bytes,length);}
 int register_editor(loader_editor_dispatch,void*,const char*){return LOADER_ERR_NOT_SUPPORTED;}
 int unregister_editor(loader_editor_dispatch,void*){return LOADER_ERR_NOT_SUPPORTED;}
 int listen(const char*,loader_http_json_handler,void*,loader_http_endpoint_v1*){return LOADER_ERR_NOT_SUPPORTED;}
@@ -142,19 +164,22 @@ void loader_category_cleanup_root(){if(managed&&on_main())native_category_regist
 extern "C" __declspec(dllexport) int ExtendInitialize(void*){
  if(dispatcher)return main_thread==GetCurrentThreadId()?0:LOADER_ERR_INVALID;
  app_container=token_is_app_container();managed=flag_enabled(L"OPEN_SV2_WINDOWS_MANAGED");if(managed&&!app_container)return LOADER_ERR_NOT_SUPPORTED;if(!managed&&!flag_enabled(L"OPEN_SV2_WINDOWS_FIXTURE"))return LOADER_ERR_NOT_SUPPORTED;
- main_thread=GetCurrentThreadId();if(!read_path(L"OPEN_SV2_LOADER_DATA_DIR",root))return LOADER_ERR_STORAGE_NOT_CONFIGURED;if(!regular(root,true))return LOADER_ERR_INVALID;
+ main_thread=GetCurrentThreadId();if(!read_path(L"OPEN_SV2_LOADER_DATA_DIR",root))return LOADER_ERR_STORAGE_NOT_CONFIGURED;if(!regular(root,true))return LOADER_ERR_INVALID;if(!plugin_storage::install(root))return LOADER_ERR_STORAGE_IO;
  if(managed){fs::path actual;if(!read_path(L"OPEN_SV2_HOST_DATA_DIR",actual)||CompareStringOrdinal(actual.c_str(),-1,(root/L"host-data").c_str(),-1,TRUE)!=CSTR_EQUAL||!regular(actual,true)||actual.native().size()+12>=MAX_PATH||!data_namespace::install(actual.wstring()))return LOADER_ERR_INVALID;host_directory=actual.u8string();}
  WNDCLASSW cls{};cls.lpfnWndProc=window_proc;cls.hInstance=GetModuleHandleW(nullptr);cls.lpszClassName=L"SV2Extend.Resident.Dispatch.v1";
  if(!RegisterClassW(&cls))return LOADER_ERR_INVALID;
  dispatcher=CreateWindowExW(0,cls.lpszClassName,L"",0,0,0,0,0,HWND_MESSAGE,nullptr,cls.hInstance,nullptr);if(!dispatcher||!SetTimer(dispatcher,1,100,nullptr)||native_panel::install(dispatcher,root.c_str())!=LOADER_OK)return LOADER_ERR_INVALID;
  wchar_t host[32768];DWORD n=GetModuleFileNameW(nullptr,host,32768);if(!n||n>=32768)return LOADER_ERR_INVALID;executable=fs::path(host).u8string();
- api.abi_version=1;api.struct_size=sizeof api;api.capabilities=LOADER_CAP_NETWORK_STATE|LOADER_CAP_PLUGIN_UI|(managed?LOADER_CAP_HOST_DATA_NAMESPACE:0);api.host_pid=GetCurrentProcessId();api.on_main_thread=1;api.host_executable=executable.c_str();api.log=log_message;
+ api.abi_version=1;api.struct_size=sizeof api;api.capabilities=LOADER_CAP_NETWORK_STATE|LOADER_CAP_PLUGIN_UI|LOADER_CAP_SCOPED_STORAGE|(managed?LOADER_CAP_HOST_DATA_NAMESPACE:0);api.host_pid=GetCurrentProcessId();api.on_main_thread=1;api.host_executable=executable.c_str();api.log=log_message;
  api.set_host_network_blocked=block;api.host_network_blocked=blocked;api.plugin_http_get=http;api.get_host_network_state=network_state;api.verify_host_network_quiescence=verify;api.plugin_storage_write=storage;
  api.register_editor_adapter=register_editor;api.unregister_editor_adapter=unregister_editor;api.editor_request_json=request;api.request_capability_json=request;api.register_capability_provider=register_provider;api.unregister_capability_provider=unregister_provider;
  api.listen_local_json=listen;api.stop_local_json=stop;api.host_data_directory=host_data;api.register_plugin_ui=native_panel::register_ui;api.unregister_plugin_ui=native_panel::unregister_ui;api.update_plugin_ui=native_panel::update_ui;
  api.set_startup_network_guard=guard;api.get_startup_network_policy=policy;api.list_startup_network_guards=guards;api.acquire_profile_exclusive=lease;api.release_profile_exclusive=lease;api.get_profile_lease_state=lease_state;api.retire_host_web_renderers=retire_web;api.retire_host_web_contexts=retire_web;api.plugin_storage_write_scoped=storage_scoped;api.plugin_storage_read_scoped=storage_read;
  if(managed){editor_service=std::make_unique<editor_lua::Service>(&api);editor_gate_result=editor_gate::install(editor_service.get());if(editor_gate_result==LOADER_OK){auto entry=root/L"host-data"/L"Roaming"/L"Dreamtonics"/L"Synthesizer V Studio 2"/L"scripts"/L"opensv2-loader-runtime.lua";editor_start_result=editor_autostart::install(editor_service.get(),entry.c_str());}}
  native_panel::set_categories_changed(category_sync);native_panel::set_open_category(native_category_registry::open_category);
+ script_service=std::make_unique<script_runtime::Service>(&api);editor_gate::set_router(script_call);
+ native_voice=std::make_unique<voice_service::Service>(main_thread);if(managed)native_voice->installed=voice_adapter::install(main_thread)==0;
+ lua_runtime.ready=editor_gate_result==LOADER_OK;if(managed)javascript_gate::install(editor_gate::call_json,loaderJavaScriptModule);js_runtime.ready=javascript_gate::ready();script_settings::register_runtime(lua_runtime,true);script_settings::register_runtime(js_runtime,false);
  load_packages();startup_receipt();log_message("windows-resident-ready");return 0;
 }
 extern "C" __declspec(dllexport) const loader_api_v1 *ExtendGetAPI(){return dispatcher?&api:nullptr;}

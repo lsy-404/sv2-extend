@@ -21,7 +21,7 @@ struct Plugin { json descriptor, values; loader_plugin_ui_event event; void *own
 struct Category { std::string id, title; bool visible; };
 struct Control {
  std::string plugin,key,type,caption,observed;
- json value;
+ json value,definition;
  native_widgets::Toggle toggle;
  native_widgets::Button button;
  native_widgets::Choice choice;
@@ -63,6 +63,7 @@ static std::filesystem::path preference_file,diagnostic_file;
 static std::string last_diagnostic;
 static json preferences=json::object(),visibility=json::object(),preference_document=json::object();
 static bool preferences_writable=false;
+static uint64_t generation=1;
 static void (*categories_changed)()=nullptr;
 static int (*open_category)(const char*)=nullptr;
 static std::wstring wide(const std::string &s) {
@@ -93,7 +94,7 @@ static json parse(const char *raw) {if(!raw||strnlen(raw,65537)>65536)return jso
 static bool save_state(const json &next,const json &next_visibility) {
  if(!preferences_writable)return false;auto document=preference_document;document["schema"]=1;document["plugins"]=next;document["categoryVisibility"]=next_visibility;std::string data=document.dump();if(data.size()>262144)return false;
  auto temp=preference_file;temp+=L".tmp-"+std::to_wstring(GetCurrentProcessId())+L"-"+std::to_wstring(GetTickCount64());HANDLE file=CreateFileW(temp.c_str(),GENERIC_WRITE,0,nullptr,CREATE_NEW,FILE_ATTRIBUTE_NORMAL,nullptr);if(file==INVALID_HANDLE_VALUE)return false;
- DWORD written=0;bool ok=WriteFile(file,data.data(),(DWORD)data.size(),&written,nullptr)&&written==data.size()&&FlushFileBuffers(file);if(!CloseHandle(file))ok=false;if(ok)ok=MoveFileExW(temp.c_str(),preference_file.c_str(),MOVEFILE_REPLACE_EXISTING|MOVEFILE_WRITE_THROUGH)!=0;if(!ok){DeleteFileW(temp.c_str());return false;}preferences=next;visibility=next_visibility;preference_document=std::move(document);return true;
+ DWORD written=0;bool ok=WriteFile(file,data.data(),(DWORD)data.size(),&written,nullptr)&&written==data.size()&&FlushFileBuffers(file);if(!CloseHandle(file))ok=false;if(ok)ok=MoveFileExW(temp.c_str(),preference_file.c_str(),MOVEFILE_REPLACE_EXISTING|MOVEFILE_WRITE_THROUGH)!=0;if(!ok){DeleteFileW(temp.c_str());return false;}preferences=next;visibility=next_visibility;preference_document=std::move(document);++generation;return true;
 }
 static bool save_values(const std::string &id,const json &values){auto next=preferences;next[id]=values;return save_state(next,visibility);}
 static void notify(const std::string &id,const json &event) {auto it=plugins.find(id);if(it==plugins.end()||!it->second.event)return; auto callback=it->second.event;auto owner=it->second.owner;std::string body=event.dump();callback(body.c_str(),owner);}
@@ -121,15 +122,16 @@ static bool reconcile(Pane &pane){
  std::set<std::string> wanted;std::vector<std::string> order;bool ok=true;
  auto add=[&](const std::string &identity,const std::string &plugin,const std::string &key,const std::string &type,const std::string &caption,const json &value,const json &field=json::object()){
   wanted.insert(identity);order.push_back(identity);auto found=pane.controls.find(identity);
+  if(found!=pane.controls.end()&&(found->second->type!=type||(type=="choice"&&found->second->definition.value("choices",json())!=field.value("choices",json())))){if(!found->second->destroy()){ok=false;return;}pane.controls.erase(found);found=pane.controls.end();}
   if(found==pane.controls.end()){
-   auto control=std::make_unique<Control>();control->plugin=plugin;control->key=key;control->type=type;control->caption=caption;control->value=value;
+   auto control=std::make_unique<Control>();control->plugin=plugin;control->key=key;control->type=type;control->caption=caption;control->value=value;control->definition=field;
    auto raw=control.get();pane.controls.emplace(identity,std::move(control));if(!create(pane,*raw,field)){ok=false;if(raw->destroy())pane.controls.erase(identity);}
   }else {auto &control=*found->second;
-   if(control.caption!=caption){bool changed=type=="label"?control.label.update(caption.c_str()):(type=="boolean"||type=="visible")?control.toggle.set_caption(caption.c_str()):control.button.set_caption(caption.c_str());if(changed){control.caption=caption;control.measured_width=-1;}else ok=false;}
+   if(control.caption!=caption){bool changed=type=="label"?control.label.update(caption.c_str()):(type=="boolean"||type=="visible")?control.toggle.set_caption(caption.c_str()):(type=="action"||type=="open")?control.button.set_caption(caption.c_str()):true;if(changed){control.caption=caption;control.measured_width=-1;}else ok=false;}
   }
  };
  if(pane.id.empty()){
-  for(const auto &item:plugins){auto &id=item.first;auto &plugin=item.second;add(id+"/title",id,"title","label",plugin.descriptor["name"],json());bool visible=!visibility.contains(id)||visibility[id].get<bool>();add(id+"/visible",id,"visible","visible",u8"\u663e\u793a\u53f3\u4fa7\u9762\u677f\u5165\u53e3",visible);add(id+"/open",id,"open","open",u8"\u6253\u5f00\u63d2\u4ef6\u9762\u677f",json());}
+  for(const auto &item:plugins){auto &id=item.first;auto &plugin=item.second;add(id+"/title",id,"title","label",plugin.descriptor["name"],json());for(const auto &field:plugin.descriptor["settings"])if(field["key"]=="enabled"&&field["type"]=="boolean")add(id+"/enabled",id,"enabled","boolean",u8"启用插件",plugin.values["enabled"],field);bool visible=!visibility.contains(id)||visibility[id].get<bool>();add(id+"/visible",id,"visible","visible",u8"\u663e\u793a\u53f3\u4fa7\u9762\u677f\u5165\u53e3",visible);add(id+"/open",id,"open","open",u8"\u6253\u5f00\u63d2\u4ef6\u9762\u677f",json());}
  }else {
   auto found=plugins.find(pane.id);if(found!=plugins.end()){auto &plugin=found->second;
    add("title",pane.id,"title","label",plugin.descriptor["sidebar"]["title"],json());add("status",pane.id,"status","label",plugin.descriptor["status"],json());
@@ -178,7 +180,7 @@ static void refresh_plugin(const std::string &id,bool center){for(auto &item:pan
 static void commit_value(const std::string &plugin,const std::string &key,const std::string &type,const json &value,bool restore){
  for(auto &pane:panes)for(auto &item:pane.second.controls){auto &c=*item.second;if(c.plugin!=plugin||c.key!=key||c.type!=type)continue;
   if(restore){if(type=="boolean"||type=="visible")native_widget_listener::set_toggle(c.toggle.listener,c.value.get<bool>());else if(type=="choice"){auto found=plugins.find(plugin);if(found!=plugins.end())for(auto &field:found->second.descriptor["settings"])if(field["key"]==key)for(size_t i=0;i<field["choices"].size();++i)if(field["choices"][i]==c.value)c.choice.set((int)i);}else if(type=="text"||type=="integer"){auto text=type=="text"?c.value.get<std::string>():c.value.dump();c.textbox.set_text(text.c_str());c.observed=text;c.edited_at=0;}}
-  else c.value=value;
+  else {if(c.value!=value){if(type=="boolean"||type=="visible")native_widget_listener::set_toggle(c.toggle.listener,value.get<bool>());else if(type=="text"||type=="integer"){auto text=type=="text"?value.get<std::string>():value.dump();c.textbox.set_text(text.c_str());c.observed=text;c.edited_at=0;}else if(type=="choice"){auto p=plugins.find(plugin);if(p!=plugins.end())for(auto &f:p->second.descriptor["settings"])if(f["key"]==key)for(size_t i=0;i<f["choices"].size();++i)if(f["choices"][i]==value)c.choice.set((int)i);}}c.value=value;}
  }
 }
 static void drain(){
@@ -215,9 +217,33 @@ static BOOL CALLBACK find_host(HWND w,LPARAM result){if(!IsWindowVisible(w)||Get
 static int install(HWND window,const wchar_t *profile_root){if(!window||!profile_root||!*profile_root)return LOADER_ERR_INVALID;dispatcher=window;thread_id=GetCurrentThreadId();diagnostic_file=std::filesystem::path(profile_root)/L"outputs"/L"windows-panel.json";std::filesystem::path dir=std::filesystem::path(profile_root)/L"preferences";std::error_code ec;std::filesystem::create_directories(dir,ec);preference_file=dir/L"windows-plugin-ui.json";
  if(!ec){DWORD attr=GetFileAttributesW(preference_file.c_str());if(attr!=INVALID_FILE_ATTRIBUTES&&(attr&(FILE_ATTRIBUTE_REPARSE_POINT|FILE_ATTRIBUTE_DIRECTORY)))return LOADER_ERR_INVALID;auto size=std::filesystem::file_size(preference_file,ec);if(ec==std::errc::no_such_file_or_directory){ec.clear();preferences_writable=true;}else if(!ec&&size<=262144){std::ifstream input(preference_file,std::ios::binary);json saved=json::parse(input,nullptr,false);if(saved.is_object()&&saved.contains("schema")&&saved["schema"].is_number_integer()&&saved["schema"]==1&&saved.contains("plugins")&&saved["plugins"].is_object()&&saved["plugins"].size()<=128){preference_document=saved;preferences=saved["plugins"];if(saved.contains("categoryVisibility")){if(!saved["categoryVisibility"].is_object())return LOADER_ERR_INVALID;for(auto it=saved["categoryVisibility"].begin();it!=saved["categoryVisibility"].end();++it)if(!it.value().is_boolean())return LOADER_ERR_INVALID;visibility=saved["categoryVisibility"]; }preferences_writable=true;}}}
  return LOADER_OK;}
-static int register_ui(const char *raw,loader_plugin_ui_event event,void *owner){if(GetCurrentThreadId()!=thread_id)return LOADER_ERR_INVALID;json d=parse(raw);if(!valid(d)||plugins.size()>=32)return LOADER_ERR_INVALID;std::string id=d["id"];if(plugins.count(id))return LOADER_ERR_INVALID;json values=json::object();for(auto &f:d["settings"]){std::string key=f["key"];json value=f["default"];if(preferences.contains(id)&&preferences[id].is_object()&&preferences[id].contains(key)&&field_value(f,preferences[id][key]))value=preferences[id][key];values[key]=value;}plugins.emplace(id,Plugin{d,values,event,owner});refresh_plugin(id,true);if(categories_changed)categories_changed();notify(id,json{{"kind","settings"},{"settings",values}});return LOADER_OK;}
-static int unregister_ui(const char *raw,void *owner){if(GetCurrentThreadId()!=thread_id||!raw)return LOADER_ERR_INVALID;auto it=plugins.find(raw);if(it==plugins.end()||it->second.owner!=owner)return LOADER_ERR_INVALID;std::string id=it->first;plugins.erase(it);refresh_plugin(id,true);if(categories_changed)categories_changed();return LOADER_OK;}
-static int update_ui(const char *raw,const char *body,void *owner){if(GetCurrentThreadId()!=thread_id||!raw)return LOADER_ERR_INVALID;auto it=plugins.find(raw);json state=parse(body);if(it==plugins.end()||it->second.owner!=owner||!state.is_object())return LOADER_ERR_INVALID;json next=it->second.descriptor;for(auto i=state.begin();i!=state.end();++i){if(i.key()!="status"&&i.key()!="sidebar")return LOADER_ERR_INVALID;next[i.key()]=i.value();}if(!valid(next))return LOADER_ERR_INVALID;if(next==it->second.descriptor)return LOADER_OK;it->second.descriptor=next;refresh_plugin(raw,false);return LOADER_OK;}
+static int register_ui(const char *raw,loader_plugin_ui_event event,void *owner){if(GetCurrentThreadId()!=thread_id)return LOADER_ERR_INVALID;json d=parse(raw);if(!valid(d)||plugins.size()>=32)return LOADER_ERR_INVALID;std::string id=d["id"];if(plugins.count(id))return LOADER_ERR_INVALID;json values=json::object();for(auto &f:d["settings"]){std::string key=f["key"];json value=f["default"];if(preferences.contains(id)&&preferences[id].is_object()&&preferences[id].contains(key)&&field_value(f,preferences[id][key]))value=preferences[id][key];values[key]=value;}plugins.emplace(id,Plugin{d,values,event,owner});++generation;refresh_plugin(id,true);if(categories_changed)categories_changed();notify(id,json{{"kind","settings"},{"settings",values}});return LOADER_OK;}
+static int unregister_ui(const char *raw,void *owner){if(GetCurrentThreadId()!=thread_id||!raw)return LOADER_ERR_INVALID;auto it=plugins.find(raw);if(it==plugins.end()||it->second.owner!=owner)return LOADER_ERR_INVALID;std::string id=it->first;plugins.erase(it);++generation;refresh_plugin(id,true);if(categories_changed)categories_changed();return LOADER_OK;}
+static int update_ui(const char *raw,const char *body,void *owner){if(GetCurrentThreadId()!=thread_id||!raw)return LOADER_ERR_INVALID;auto it=plugins.find(raw);json state=parse(body);if(it==plugins.end()||it->second.owner!=owner||!state.is_object())return LOADER_ERR_INVALID;json next=it->second.descriptor;for(auto i=state.begin();i!=state.end();++i){if(i.key()!="status"&&i.key()!="sidebar"&&i.key()!="settings")return LOADER_ERR_INVALID;next[i.key()]=i.value();}if(!valid(next))return LOADER_ERR_INVALID;if(next==it->second.descriptor)return LOADER_OK;auto old_values=it->second.values;json values=json::object();for(const auto &field:next["settings"]){auto key=field["key"].get<std::string>();values[key]=old_values.contains(key)&&field_value(field,old_values[key])?old_values[key]:field["default"];}it->second.descriptor=next;it->second.values=values;++generation;refresh_plugin(raw,true);for(const auto &field:next["settings"]){auto key=field["key"].get<std::string>();commit_value(raw,key,field["type"],values[key],false);}if(values!=old_values)notify(raw,{{"kind","settings"},{"settings",values}});return LOADER_OK;}
+
+static json snapshot(){json items=json::array();for(auto &entry:plugins){auto item=entry.second.descriptor;item["visible"]=!visibility.contains(entry.first)||visibility[entry.first].get<bool>();item["values"]=entry.second.values;items.push_back(std::move(item));}return {{"generation",generation},{"plugins",items},{"canPersist",preferences_writable},{"persistenceError",preferences_writable?"":"UI_STORAGE_UNAVAILABLE"},{"hostPid",GetCurrentProcessId()},{"extendEntryVisible",true},{"manager",{{"status","Native packages are installed through the Windows installer."},{"installAvailable",false},{"updateAvailable",false}}}};}
+static json call(const std::string &method,const json &args){
+ auto fail=[](const char *code){return json{{"ok",false},{"error",{{"code",code}}}};};auto success=[](){return json{{"ok",true},{"result",snapshot()}};};
+ if(GetCurrentThreadId()!=thread_id)return fail("MAIN_THREAD_REQUIRED");if(!args.is_object())return fail("INVALID_ARGUMENT");
+ if(method=="ui.snapshot")return args.empty()?success():fail("INVALID_ARGUMENT");
+ if(method!="ui.action"&&method!="ui.set_visible"&&method!="ui.set_setting"&&method!="ui.set_settings")return fail("UNSUPPORTED_UI_METHOD");
+ if(!args.contains("generation")||!args["generation"].is_number_integer()||args["generation"]!=json(generation))return fail("STALE_UI_GENERATION");
+ if(!args.contains("id")||!args["id"].is_string())return fail("PLUGIN_UI_NOT_FOUND");auto id=args["id"].get<std::string>();auto found=plugins.find(id);if(found==plugins.end())return fail("PLUGIN_UI_NOT_FOUND");
+ if(method=="ui.action"){
+  if(args.size()!=3||!args.contains("action")||!name(args["action"]))return fail("INVALID_ARGUMENT");bool available=false;for(auto &row:found->second.descriptor["sidebar"]["rows"])if(row["type"]=="button"&&row["id"]==args["action"])available=true;
+  if(!available||!found->second.event)return fail("UI_ACTION_UNAVAILABLE");notify(id,{{"kind","action"},{"action",args["action"]}});return success();
+ }
+ if(method=="ui.set_visible"){
+  if(args.size()!=3||!args.contains("visible")||!args["visible"].is_boolean())return fail("INVALID_ARGUMENT");auto next=visibility;next[id]=args["visible"];if(!save_state(preferences,next))return fail("UI_PREFERENCES_WRITE_FAILED");commit_value(id,"visible","visible",args["visible"],false);if(categories_changed)categories_changed();refresh_plugin(id,true);return success();
+ }
+ auto values=found->second.values;
+ if(method=="ui.set_setting"){
+  if(args.size()!=4||!args.contains("key")||!name(args["key"])||!args.contains("value"))return fail("INVALID_ARGUMENT");bool valid=false;for(auto &field:found->second.descriptor["settings"])if(field["key"]==args["key"]&&field_value(field,args["value"]))valid=true;if(!valid)return fail("INVALID_SETTING_VALUE");values[args["key"].get<std::string>()]=args["value"];
+ }else if(method=="ui.set_settings"){
+  if(args.size()!=3||!args.contains("settings")||!args["settings"].is_object())return fail("INVALID_ARGUMENT");if(args["settings"].size()!=found->second.descriptor["settings"].size())return fail("INVALID_SETTING_VALUE");for(auto &field:found->second.descriptor["settings"]){auto key=field["key"].get<std::string>();if(!args["settings"].contains(key)||!field_value(field,args["settings"][key]))return fail("INVALID_SETTING_VALUE");}values=args["settings"];
+ }else return fail("UNSUPPORTED_UI_METHOD");
+ if(!save_values(id,values))return fail("UI_PREFERENCES_WRITE_FAILED");found->second.values=values;for(auto &field:found->second.descriptor["settings"]){auto key=field["key"].get<std::string>();commit_value(id,key,field["type"],values[key],false);}notify(id,{{"kind","settings"},{"settings",values}});return success();
+}
 }
 #endif
 

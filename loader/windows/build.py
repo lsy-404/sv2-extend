@@ -3,6 +3,8 @@ from pathlib import Path
 import argparse, hashlib, json, os, re, shutil, subprocess
 parser=argparse.ArgumentParser();parser.add_argument('--out',type=Path,required=True);parser.add_argument('--prefix',default=os.environ.get('MINGW_PREFIX','x86_64-w64-mingw32-'));args=parser.parse_args()
 source=Path(__file__).resolve().parent;out=args.out.resolve();out.mkdir(parents=True,exist_ok=True)
+module=(source.parents[1]/'plugins/javascript-extend/sv2_extend.js').read_text(encoding='utf-8')
+(out/'javascript_bundle.h').write_text('static const char loaderJavaScriptModule[]='+json.dumps(module)+';\n',encoding='utf-8')
 def run(tool,*arguments):subprocess.run([args.prefix+tool,*map(str,arguments)],check=True)
 run('gcc','-c',source/'early_entry.S','-o',out/'early_entry.o')
 relocations=subprocess.check_output([args.prefix+'objdump','-r',str(out/'early_entry.o')],text=True)
@@ -14,7 +16,7 @@ flags=['-std=c++17','-D_WIN32_WINNT=0x0602','-O2','-Wall','-Wextra','-Werror','-
 hook_objects=[]
 for relative in ['buffer.c','hook.c','trampoline.c','hde/hde64.c']:
     obj=out/('minhook-'+Path(relative).stem+'.o');run('gcc','-O2','-c',source/'vendor/minhook/src'/relative,'-o',obj);hook_objects.append(obj)
-run('g++',*flags,'-shared',source/'core.cpp',source/'editor_gate.cpp',source/'editor_autostart.cpp',*hook_objects,'-o',out/'ExtendCore.dll','-luser32','-lgdi32','-ladvapi32','-lshell32','-lole32','-luuid','-lbcrypt','-Wl,--dynamicbase,--nxcompat')
+run('g++',*flags,'-shared',source/'core.cpp',source/'editor_gate.cpp',source/'editor_autostart.cpp',source/'javascript_gate.cpp',source/'voice_adapter.cpp',*hook_objects,'-o',out/'ExtendCore.dll','-luser32','-lgdi32','-ladvapi32','-lshell32','-lole32','-luuid','-lbcrypt','-Wl,--dynamicbase,--nxcompat')
 run('g++',*flags,'-municode',source/'launcher.cpp','-o',out/'ExtendLauncher.exe','-luserenv','-ladvapi32','-lshell32','-lole32','-loleaut32','-luuid','-Wl,--dynamicbase,--nxcompat')
 run('g++',*flags,'-municode',source/'fixture.cpp','-o',out/'ExtendFixture.exe','-luser32','-Wl,--dynamicbase,--nxcompat')
 (out/'namespace-host').mkdir(exist_ok=True)
