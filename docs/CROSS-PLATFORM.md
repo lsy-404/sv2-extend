@@ -38,8 +38,8 @@
 | MCP、Lua、JS 原生宿主接入 | SV2 验证 | 2.3.0 隔离宿主已验证 MCP、官方 Lua 与 JS 调用 |
 | 声库、pitch、导出后端 | SV2 验证 | 已验证音符组、pitch、声库选择及原生 WAV 混音 |
 | 托管数据目录重定向 | SV2 验证 | 托管主程序 Shell 路径重定向验证 |
-| 显式网页上下文回收 | WebKit 本机验证；不等于完整隔离 | WebView 上下文回收；renderer-only 返回 NOT_SUPPORTED |
-| 网络隔离验证 | 尚未验证完整覆盖 | 官方 2.3.0 受管宿主的受支持入口及 Job 范围内已验证 |
+| 显式网页上下文回收 | WebKit 本机验证；不等于完整隔离 | 不提供破坏性回收；断网保留本地 WebView 页面 |
+| 网络隔离验证 | 尚未验证完整覆盖 | 官方 2.3.0 受管宿主与已配置的内嵌 WebView；不覆盖任意后代 |
 
 Windows 支持 `--host <official-synthv-studio.exe> <profile-directory>`。启动器复制完整官方安装，迁移用户数据至独立 profile，原目录和已有数据目标保持原样；受管宿主以当前用户权限运行，在 main 前加载 Core。直接导入和动态解析的 Roaming/Local Shell 查询都重定向至 profile。同一 profile 的运行锁随宿主保持，重复启动被拒绝。受管进程和子进程归属同一 Job，宿主可查询成员。官方目录的文件列表、大小或修改时间变化后，保留旧副本并更新受管程序。
 

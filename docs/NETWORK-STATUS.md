@@ -2,9 +2,11 @@
 
 ## Windows 受管宿主
 
-官方 Windows 2.3.0 受管宿主支持运行时阻断与恢复联网。策略状态通过 `get_host_network_policy` 区分请求、已应用、待处理和错误；`get_host_network_state` 与 `verify_host_network_quiescence` 另行报告排空和验证结果。已在真实宿主验证 WebView 环境及 controller 回调、原生 Close、受管 Job 中无其他成员、当前宿主 IP 活动连接为零，并在阻断策略生效后读回 `whole_host_verified=1`；恢复联网后可重新在线运行。
+官方 Windows 2.3.0 受管宿主支持运行时阻断与恢复联网。`get_host_network_policy` 区分请求、已应用、待处理和错误；`verify_host_network_quiescence` 另行确认宿主连接排空、精确宿主防火墙规则及内嵌 WebView 传输状态。
 
-该验证适用于官方 2.3.0 已支持的导入入口、受管 Job 及完整匹配的宿主防火墙规则。存在未知子进程、已调用运行时但尚未完成的 WebView 回调、未关闭连接或规则不匹配时不能将其视为已验证；不覆盖其他宿主或任意原生插件的全部联网行为。
+WebView 复用系统现有 Runtime，不安装或复制另一套。所有受管 environment 使用宿主内 SOCKS5 传输；离线时关闭已有隧道并拒绝新连接，保留原生 controller、本地页面和回环控制通道。私有 WebView profile 的 WebRTC 非代理 UDP 始终禁用，在线登录和下载使用 TCP。系统其他应用的 Runtime 和网络设置不变。
+
+验证范围是 SV2 和其受管内嵌 WebView，不是任意后代程序或原生插件的安全沙箱。受管 Job 成员须与已配置 Runtime 匹配；未知进程、待决回调、活动隧道、冲突的代理设置或不匹配规则都保留未验证状态。配置使用独立 profile，不能在已运行的浏览器上覆盖 Preferences。恢复在线后允许建立新网络连接，本地页面继续工作。
 
 ## macOS 覆盖
 

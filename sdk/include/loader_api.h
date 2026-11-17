@@ -58,7 +58,7 @@ typedef struct {
     uint32_t requested_blocked;
     uint32_t tracked_host_tasks_active;
     uint32_t tracked_tasks_drained;
-    uint32_t whole_host_verified;
+    uint32_t whole_host_verified; /* Supported host and embedded web paths; not a native-code sandbox. */
 } loader_network_state_v1;
 typedef struct {
     uint32_t abi_version,struct_size;
@@ -85,8 +85,7 @@ typedef struct {
     int (*host_network_blocked)(void); /* Requested policy only; never a verification receipt. */
     int (*plugin_http_get)(const char *url, loader_http_completion completion, void *context);
     int (*get_host_network_state)(loader_network_state_v1 *state);
-    /* Must succeed before a consumer treats host network as quiescent.
-       Current experimental backend always returns NETWORK_UNVERIFIED. */
+    /* Must succeed before a consumer treats the supported host network paths as quiescent. */
     int (*verify_host_network_quiescence)(uint64_t expected_generation, loader_network_state_v1 *state);
     /* Legacy prototype storage in network-probe/data; preserved for old plugins.
        New plugins use scoped storage below. */
