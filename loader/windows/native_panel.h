@@ -86,6 +86,7 @@ static bool valid(const json &d) {
  std::set<std::string> ids;
  for(auto &r:d["sidebar"]["rows"]) {if(!r.is_object()||!r.contains("type")||!r["type"].is_string()||!r.contains("text")||!text(r["text"],512))return false; auto t=r["type"].get<std::string>(); if(t=="label")continue; if(t!="button"||!r.contains("id")||!name(r["id"])||!ids.insert(r["id"].get<std::string>()).second)return false;}
  ids.clear(); for(auto &f:d["settings"]) {if(!f.is_object()||!f.contains("key")||!name(f["key"])||!ids.insert(f["key"].get<std::string>()).second||!f.contains("title")||!text(f["title"],128)||!f.contains("type")||!f["type"].is_string()||!f.contains("default"))return false;
+ if((f.contains("section")&&!text(f["section"],128))||(f.contains("detail")&&!text(f["detail"],512)))return false;
  if(f["type"]=="choice") {if(!f.contains("choices")||!f["choices"].is_array()||f["choices"].empty()||f["choices"].size()>32)return false;for(auto &c:f["choices"])if(!text(c,256))return false;}
  if(!field_value(f,f["default"]))return false; } return true;
 }
@@ -134,7 +135,7 @@ static bool reconcile(Pane &pane){
   auto found=plugins.find(pane.id);if(found!=plugins.end()){auto &plugin=found->second;
    add("title",pane.id,"title","label",plugin.descriptor["sidebar"]["title"],json());add("status",pane.id,"status","label",plugin.descriptor["status"],json());
    size_t index=0;for(const auto &row:plugin.descriptor["sidebar"]["rows"]){auto type=row["type"].get<std::string>();auto key=type=="button"?row["id"].get<std::string>():std::to_string(index);add("row/"+type+"/"+key,pane.id,key,type=="button"?"action":"label",row["text"],json());++index;}
-   for(const auto &field:plugin.descriptor["settings"]){auto key=field["key"].get<std::string>(),type=field["type"].get<std::string>();if(type!="boolean")add("caption/"+key,pane.id,key,"label",field["title"],json());add("setting/"+key,pane.id,key,type,field["title"],plugin.values[key],field);}
+   std::string section;for(const auto &field:plugin.descriptor["settings"]){auto key=field["key"].get<std::string>(),type=field["type"].get<std::string>();if(field.contains("section")){auto next=field["section"].get<std::string>();if(next!=section){section=next;add("section/"+key,pane.id,key,"label",section,json());}}if(type!="boolean")add("caption/"+key,pane.id,key,"label",field["title"],json());add("setting/"+key,pane.id,key,type,field["title"],plugin.values[key],field);if(field.contains("detail"))add("detail/"+key,pane.id,key,"label",field["detail"],json());}
   }
  }
  for(auto it=pane.controls.begin();it!=pane.controls.end();){if(!wanted.count(it->first)){if(it->second->destroy())it=pane.controls.erase(it);else{ok=false;++it;}}else ++it;}
