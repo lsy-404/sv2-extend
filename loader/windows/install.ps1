@@ -6,6 +6,42 @@ param(
 )
 $ErrorActionPreference = 'Stop'
 $PSNativeCommandUseErrorActionPreference = $true
+Add-Type -TypeDefinition @"
+using System;
+using System.ComponentModel;
+using System.Runtime.InteropServices;
+using System.Text;
+using Microsoft.Win32.SafeHandles;
+public static class ExecutableIntegrity {
+ [DllImport("advapi32.dll", CharSet=CharSet.Unicode, SetLastError=true)] static extern bool ConvertStringSecurityDescriptorToSecurityDescriptor(string s, uint r, out IntPtr sd, IntPtr size);
+ [DllImport("advapi32.dll", CharSet=CharSet.Unicode, SetLastError=true)] static extern bool SetFileSecurity(string path, uint info, IntPtr sd);
+ [DllImport("advapi32.dll", CharSet=CharSet.Unicode, SetLastError=true)] static extern bool GetFileSecurity(string path, uint info, IntPtr sd, uint length, out uint needed);
+ [DllImport("advapi32.dll", CharSet=CharSet.Unicode, SetLastError=true)] static extern bool ConvertSecurityDescriptorToStringSecurityDescriptor(IntPtr sd, uint revision, uint info, out IntPtr text, IntPtr length);
+ [DllImport("kernel32.dll")] static extern IntPtr LocalFree(IntPtr value);
+ [DllImport("kernel32.dll", CharSet=CharSet.Unicode, SetLastError=true)] static extern SafeFileHandle CreateFileW(string name, uint access, uint share, IntPtr security, uint creation, uint flags, IntPtr template);
+ [DllImport("kernel32.dll", CharSet=CharSet.Unicode, SetLastError=true)] static extern uint GetFinalPathNameByHandleW(SafeFileHandle file, StringBuilder path, uint size, uint flags);
+ public static string Physical(string path, bool directory) {
+  using(var file=CreateFileW(path,0x80,7,IntPtr.Zero,3,directory?0x02000000u:0u,IntPtr.Zero)) {
+   if(file.IsInvalid) throw new Win32Exception(Marshal.GetLastWin32Error());
+   var value=new StringBuilder(32768); uint n=GetFinalPathNameByHandleW(file,value,(uint)value.Capacity,0);
+   if(n==0 || n>=value.Capacity) throw new Win32Exception(Marshal.GetLastWin32Error());
+   var result=value.ToString();
+   if(result.StartsWith(@"\\?\UNC\",StringComparison.OrdinalIgnoreCase)) return @"\\"+result.Substring(8);
+   if(result.StartsWith(@"\\?\",StringComparison.OrdinalIgnoreCase)) return result.Substring(4);
+   throw new InvalidOperationException("Unexpected canonical path.");
+  }
+ }
+ public static void Medium(string path) {
+  IntPtr sd=IntPtr.Zero, read=IntPtr.Zero, text=IntPtr.Zero;
+  try {
+   if(!ConvertStringSecurityDescriptorToSecurityDescriptor("S:(ML;;NW;;;ME)",1,out sd,IntPtr.Zero) || !SetFileSecurity(path,16,sd)) throw new Win32Exception(Marshal.GetLastWin32Error());
+   uint n; GetFileSecurity(path,16,IntPtr.Zero,0,out n); if(n==0) throw new Win32Exception(Marshal.GetLastWin32Error());
+   read=Marshal.AllocHGlobal((int)n); if(!GetFileSecurity(path,16,read,n,out n) || !ConvertSecurityDescriptorToStringSecurityDescriptor(read,1,16,out text,IntPtr.Zero)) throw new Win32Exception(Marshal.GetLastWin32Error());
+   if(Marshal.PtrToStringUni(text)!="S:(ML;;NW;;;ME)") throw new InvalidOperationException("Executable integrity verification failed.");
+  } finally { if(sd!=IntPtr.Zero) LocalFree(sd); if(read!=IntPtr.Zero) Marshal.FreeHGlobal(read); if(text!=IntPtr.Zero) LocalFree(text); }
+ }
+}
+"@
 $build = (Resolve-Path -LiteralPath $BuildDirectory).Path
 $hostFile = Get-Item -LiteralPath $HostExecutable
 if ($hostFile.PSIsContainer -or $hostFile.Name -ne 'synthv-studio.exe') { throw 'Select the official SV2 executable.' }
@@ -39,8 +75,23 @@ foreach ($package in $PluginPackage) {
     $relative = [string]$definition.nativeLibraries.'windows-x86_64'
     $library = [IO.Path]::GetFullPath((Join-Path $folder $relative))
     if ([IO.Path]::IsPathRooted($relative) -or !$library.StartsWith($folder.TrimEnd('\') + '\', [StringComparison]::OrdinalIgnoreCase) -or !(Test-Path -LiteralPath $library -PathType Leaf)) { throw 'Invalid Windows plugin library path.' }
+    $helpers = @()
+    if ($definition.nativeHelpers) {
+        $declared = $definition.nativeHelpers.'windows-x86_64'
+        if ($null -ne $declared) {
+            if ($declared -isnot [array] -or $declared.Count -gt 8) { throw 'Invalid Windows helper list.' }
+            foreach ($entry in $declared) {
+                if ($entry -isnot [string] -or !$entry -or $entry.Length -gt 512 -or $entry.Contains(':') -or [IO.Path]::IsPathRooted($entry) -or [IO.Path]::GetExtension($entry) -cne '.exe') { throw 'Invalid Windows helper path.' }
+                $parts = $entry -split '[\\/]'
+                if ($parts -contains '..' -or $parts -contains '.' -or $parts -contains '') { throw 'Invalid Windows helper path.' }
+                $helper = [IO.Path]::GetFullPath((Join-Path $folder $entry))
+                if (!$helper.StartsWith($folder.TrimEnd('\') + '\', [StringComparison]::OrdinalIgnoreCase) -or !(Test-Path -LiteralPath $helper -PathType Leaf)) { throw 'Invalid Windows helper path.' }
+                $helpers += $entry
+            }
+        }
+    }
     if ($packages.id -contains $definition.id) { throw 'Duplicate plugin package ID.' }
-    $packages += [pscustomobject]@{ id = $definition.id; path = $folder }
+    $packages += [pscustomobject]@{ id = $definition.id; path = $folder; helpers = $helpers }
 }
 $backup = $null
 if (Test-Path -LiteralPath $install) {
@@ -65,6 +116,7 @@ foreach ($name in $files) {
     $destination = Join-Path $native $name
     Copy-Item -LiteralPath $source -Destination $destination -Force
     if ((Get-FileHash -LiteralPath $source).Hash -ne (Get-FileHash -LiteralPath $destination).Hash) { throw "Installed file verification failed: $name" }
+    if ([IO.Path]::GetExtension($name) -eq ".exe") { [ExecutableIntegrity]::Medium($destination) }
 }
 foreach ($package in $packages) {
     $target = Join-Path (Join-Path $profile 'plugins') $package.id
@@ -77,24 +129,27 @@ foreach ($package in $packages) {
         Move-Item -LiteralPath $resolvedTarget -Destination (Join-Path $retired $package.id)
     }
     Copy-Item -LiteralPath $package.path -Destination $target -Recurse
+    foreach ($helper in $package.helpers) { [ExecutableIntegrity]::Medium((Join-Path $target $helper)) }
 }
+$managedHost = Join-Path $profile 'runtime/Synthesizer V Studio 2 Pro/synthv-studio.exe'
+if (Test-Path -LiteralPath $managedHost -PathType Leaf) { [ExecutableIntegrity]::Medium($managedHost) }
 $installedResources = Join-Path $native 'EditorLua'
 New-Item -ItemType Directory -Path $installedResources -Force | Out-Null
 Copy-Item -Path (Join-Path $editorResources '*.lua') -Destination $installedResources -Force
 $shortcutPath = Join-Path ([Environment]::GetFolderPath('Programs')) 'Extend Loader.lnk'
 $shell = New-Object -ComObject WScript.Shell
 $shortcut = $shell.CreateShortcut($shortcutPath)
-$shortcut.TargetPath = Join-Path $native 'ExtendLauncher.exe'
-$shortcut.Arguments = '--host "' + $hostFile.FullName + '" "' + $profile + '"'
-$shortcut.WorkingDirectory = $native
+$shortcut.TargetPath = [ExecutableIntegrity]::Physical((Join-Path $native 'ExtendLauncher.exe'), $false)
+$shortcut.Arguments = '--host "' + $hostFile.FullName + '" "' + [ExecutableIntegrity]::Physical($profile, $true) + '"'
+$shortcut.WorkingDirectory = [ExecutableIntegrity]::Physical($native, $true)
 $shortcut.Description = 'SV2 Extend Loader'
 $shortcut.IconLocation = $hostFile.FullName + ',0'
 $shortcut.Save()
 $receipt = [ordered]@{
     schema = 1
     platform = 'windows-x86_64'
-    installDirectory = $install
-    profileDirectory = $profile
+    installDirectory = [ExecutableIntegrity]::Physical($install, $true)
+    profileDirectory = [ExecutableIntegrity]::Physical($profile, $true)
     officialHost = $hostFile.FullName
     shortcut = $shortcutPath
     backup = $backup
