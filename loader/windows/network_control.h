@@ -96,7 +96,7 @@ class Controller {
   if(SUCCEEDED(result)){value_.policy_applied=true;value_.applied_blocked=block;}
  }
 public:
- explicit Controller(std::wstring target):target_(std::move(target)),monitor_([this]{monitor();}){std::unique_lock<std::mutex> lock(mutex_);wake_.wait(lock,[this]{return monitor_ready_;});}
+ explicit Controller(std::wstring target,uint64_t generation=0):target_(std::move(target)),monitor_([this]{monitor();}){std::unique_lock<std::mutex> lock(mutex_);wake_.wait(lock,[this]{return monitor_ready_;});value_.generation=generation;}
  Controller(const Controller&)=delete;Controller& operator=(const Controller&)=delete;
  ~Controller(){{std::lock_guard<std::mutex> lock(mutex_);stopping_=true;}wake_.notify_all();if(worker_.joinable())worker_.join();if(monitor_.joinable())monitor_.join();}
  bool adopt(bool blocked){

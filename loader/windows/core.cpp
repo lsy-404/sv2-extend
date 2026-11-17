@@ -30,6 +30,7 @@
 #include "network_scope.h"
 #include "windows_socket_gate.h"
 #include "windows_child_gate.h"
+#include "network_bootstrap.h"
 using json=nlohmann::json;namespace fs=std::filesystem;
 namespace {
 DWORD main_thread;HWND dispatcher;loader_api_v1 api{};std::string executable,host_directory;fs::path root;json package_results=json::array();bool managed=false,app_container=false;
@@ -40,6 +41,7 @@ std::unique_ptr<export_service::Service> native_export;
 std::unique_ptr<profile_lease::Service> profile_operations;
 std::unique_ptr<startup_policy::Service> startup_network;
 std::unique_ptr<windows_network::Controller> network_controller;
+windows_network::State bootstrap_network_state;bool network_initialization_attempted=false;
 script_settings::Runtime lua_runtime{&api,"opensv2.lua-extend","Lua Extend",false},js_runtime{&api,"opensv2.javascript-extend","JS Extend",false};
 uint64_t capability_generation=1;
 std::unique_ptr<editor_lua::Service> editor_service;int editor_gate_result=LOADER_ERR_NOT_SUPPORTED,editor_start_result=LOADER_ERR_NOT_SUPPORTED;
@@ -122,15 +124,22 @@ void namespace_receipt(){
 }
 void editor_receipt(){if(!managed)return;static unsigned attempts=0;static ULONGLONG attempted_at=0;auto now=GetTickCount64();auto state=editor_autostart::status();if(editor_start_result==LOADER_OK&&!state.scan_seen&&editor_autostart::root_ready()&&attempts<20&&now-attempted_at>=500){attempted_at=now;attempts++;editor_autostart::request_initial_scan();state=editor_autostart::status();}json value{{"hostPid",GetCurrentProcessId()},{"getenvGateResult",editor_gate_result},{"autostartResult",editor_start_result},{"installed",state.installed},{"scanSeen",state.scan_seen},{"runRequested",state.run_requested},{"scanAttempts",attempts},{"initialScanReason",state.initial_scan_reason},{"editorReady",editor_online()}};static std::string previous;auto body=value.dump(2);if(body==previous)return;std::ofstream output(root/L"outputs"/L"windows-editor.json",std::ios::binary|std::ios::trunc);if(!output)return;output<<body;output.close();if(output)previous=body;}
 LRESULT CALLBACK window_proc(HWND window,UINT message,WPARAM w,LPARAM l){if(message==WM_APP+2){native_panel::drain();return 0;}if(message==WM_APP+1){dispatch_request((Request*)l);return 0;}if(message==WM_TIMER){network_tick();native_panel::drain();if(native_voice)native_voice->tick();if(native_export)native_export->tick();if(editor_service)editor_service->tick();std::vector<Request*> expired;{std::lock_guard<std::mutex> guard(requests_mutex);for(auto &r:requests)if(!r->delivered&&GetTickCount64()>=r->deadline)expired.push_back(r.get());}for(auto r:expired)error(r,"TIMEOUT");category_tick();namespace_receipt();editor_receipt();return 0;}return DefWindowProcW(window,message,w,l);}
-void network_tick(){if(network_controller){auto state=network_controller->state();if(state.policy_applied&&!state.pending&&!state.error&&!state.applied_blocked){windows_socket_gate::setblocked(false);windows_child_gate::setblocked(false);}}}
+void network_tick(){
+ if(managed&&!network_initialization_attempted&&editor_autostart::root_ready()){
+  network_initialization_attempted=true;
+  try{auto host=fs::u8path(executable).wstring();network_controller=std::make_unique<windows_network::Controller>(host,bootstrap_network_state.generation);network_controller->adopt(bootstrap_network_state.requested_blocked);}
+  catch(const std::exception&){bootstrap_network_state.policy_applied=false;bootstrap_network_state.error=LOADER_ERR_NETWORK_UNVERIFIED;log_message("network-controller-initialization-failed");}
+ }
+ if(network_controller){auto state=network_controller->state();if(state.policy_applied&&!state.pending&&!state.error&&!state.applied_blocked){windows_socket_gate::setblocked(false);windows_child_gate::setblocked(false);}}
+}
 int network_policy(loader_network_policy_state_v1 *state){
  if(!on_main()||!state||state->abi_version!=LOADER_ABI_V1||state->struct_size<sizeof *state)return LOADER_ERR_INVALID;
- if(!network_controller)return LOADER_ERR_NOT_SUPPORTED;network_tick();auto value=network_controller->state();
+ if(!managed)return LOADER_ERR_NOT_SUPPORTED;network_tick();auto value=network_controller?network_controller->state():bootstrap_network_state;
  *state={LOADER_ABI_V1,sizeof *state,value.generation,value.requested_blocked?1u:0u,value.applied_blocked?1u:0u,value.pending?1u:0u,value.error?value.error:(!value.policy_applied&&!value.pending?LOADER_ERR_NETWORK_UNVERIFIED:0)};return LOADER_OK;
 }
 int network_state(loader_network_state_v1 *state){
  if(!on_main()||!state||state->abi_version!=LOADER_ABI_V1||state->struct_size<sizeof *state)return LOADER_ERR_INVALID;
- if(!network_controller)return LOADER_ERR_NOT_SUPPORTED;network_tick();auto policy=network_controller->state();auto sockets=windows_socket_gate::state();auto children=windows_child_gate::state();auto scope=network_scope::job();auto actual=network_scope::connections(GetCurrentProcessId());auto children_after=windows_child_gate::state();
+ if(!managed)return LOADER_ERR_NOT_SUPPORTED;network_tick();auto policy=network_controller?network_controller->state():bootstrap_network_state;auto sockets=windows_socket_gate::state();auto children=windows_child_gate::state();auto scope=network_scope::job();auto actual=network_scope::connections(GetCurrentProcessId());auto children_after=windows_child_gate::state();
  uint32_t connections=actual.tcp4_active+actual.tcp6_active+actual.udp4_active+actual.udp6_active;
  bool drained=sockets.installed&&sockets.blocked&&!sockets.pending&&!sockets.discovery_error&&!sockets.active&&!sockets.unknown&&!sockets.close_failed&&actual.complete&&!connections;
  bool child_scope=children.installed&&children.blocked&&scope.child_scope&&children.generation==children_after.generation&&editor_gate_result==LOADER_OK;
@@ -142,8 +151,8 @@ int network_state(loader_network_state_v1 *state){
  *state={LOADER_ABI_V1,sizeof *state,policy.generation,intercepted,unverified,policy.requested_blocked?1u:0u,connections+scope.child_count,drained?1u:0u,verified?1u:0u};return LOADER_OK;
 }
 int verify(uint64_t generation,loader_network_state_v1 *state){int result=network_state(state);if(result)return result;if(generation!=state->generation)return LOADER_ERR_STALE_GENERATION;return state->whole_host_verified?LOADER_OK:LOADER_ERR_NETWORK_UNVERIFIED;}
-int block(int value){if(!on_main()||(value!=0&&value!=1))return LOADER_ERR_INVALID;if(!network_controller)return LOADER_ERR_NOT_SUPPORTED;if(!network_controller->request(value!=0))return LOADER_ERR_PROFILE_BUSY;if(value){windows_child_gate::setblocked(true);windows_socket_gate::setblocked(true);}return LOADER_OK;}
-int blocked(){return network_controller&&network_controller->state().requested_blocked?1:0;}
+int block(int value){if(!on_main()||(value!=0&&value!=1))return LOADER_ERR_INVALID;network_tick();if(!network_controller)return LOADER_ERR_PROFILE_BUSY;if(!network_controller->request(value!=0))return LOADER_ERR_PROFILE_BUSY;if(value){windows_child_gate::setblocked(true);windows_socket_gate::setblocked(true);}return LOADER_OK;}
+int blocked(){return (network_controller?network_controller->state():bootstrap_network_state).requested_blocked?1:0;}
 int http(const char*,loader_http_completion done,void *context){if(done)done(0,LOADER_ERR_NOT_SUPPORTED,nullptr,0,context);return LOADER_ERR_NOT_SUPPORTED;}
 int storage(const char*,const uint8_t*,size_t){return LOADER_ERR_NOT_SUPPORTED;}
 int storage_scoped(const char *id,const char *key,const uint8_t *bytes,size_t length){return plugin_storage::write(id,key,bytes,length);}
@@ -206,7 +215,7 @@ void startup_receipt(){std::error_code ec;auto directory=root/L"outputs";fs::cre
 }
 void loader_export_set_root(void *root){export_native::set_root(root);}
 void loader_category_before_root(){if(managed&&on_main()){if(native_category_registry::prepare(reinterpret_cast<unsigned char*>(GetModuleHandleW(nullptr)),main_thread,category_update,category_remove,native_panel::owns_child))category_sync();else log_message("native-category-unavailable");}}
-void loader_category_after_root(){if(managed&&on_main())category_tick();}
+void loader_category_after_root(){if(managed&&on_main()){if(!SetTimer(dispatcher,1,100,nullptr))log_message("runtime-timer-start-failed");category_tick();}}
 void loader_category_cleanup_root(){if(managed&&on_main())native_category_registry::set_host(nullptr);}
 extern "C" __declspec(dllexport) int ExtendInitialize(void*){
  if(dispatcher)return main_thread==GetCurrentThreadId()?0:LOADER_ERR_INVALID;
@@ -220,9 +229,11 @@ extern "C" __declspec(dllexport) int ExtendInitialize(void*){
  if(managed){
   startup_network=std::make_unique<startup_policy::Service>(main_thread);loader_startup_network_state_v1 startup{LOADER_ABI_V1,sizeof startup,0,0,0,0,0};
   if(startup_network->state(&startup)!=LOADER_OK||!windows_socket_gate::install()||!windows_child_gate::install())return LOADER_ERR_POLICY_INVALID;
-  network_controller=std::make_unique<windows_network::Controller>(host);
-  if(startup.requested_blocked){if(!flag_enabled(L"OPEN_SV2_STARTUP_NETWORK_APPLIED")||!network_controller->adopt(true)||!windows_socket_gate::setblocked(true))return LOADER_ERR_POLICY_INVALID;startup_network->mark_applied();}
-  else{network_controller->adopt(false);windows_child_gate::setblocked(false);}
+  wchar_t handle[32]{};DWORD length=GetEnvironmentVariableW(L"OPEN_SV2_NETWORK_BOOTSTRAP_HANDLE",handle,32);wchar_t *end=nullptr;auto raw=length&&length<32?_wcstoui64(handle,&end,10):0;windows_network_bootstrap::Record receipt;
+  bool observed=raw&&end&&!*end&&windows_network_bootstrap::read(reinterpret_cast<HANDLE>(uintptr_t(raw)),receipt);
+  if(observed){bootstrap_network_state.generation=receipt.generation;bootstrap_network_state.requested_blocked=receipt.requested!=0;bootstrap_network_state.applied_blocked=receipt.applied!=0;bootstrap_network_state.policy_applied=true;}
+  if(startup.requested_blocked){if(!observed||!receipt.requested||!receipt.applied||!windows_socket_gate::setblocked(true))return LOADER_ERR_POLICY_INVALID;startup_network->mark_applied();}
+  else{bootstrap_network_state.requested_blocked=false;windows_child_gate::setblocked(false);}
  }
  profile_operations=std::make_unique<profile_lease::Service>(main_thread,managed);
  api.abi_version=1;api.struct_size=sizeof api;api.capabilities=LOADER_CAP_NETWORK_STATE|LOADER_CAP_PLUGIN_UI|LOADER_CAP_SCOPED_STORAGE|(managed?(LOADER_CAP_HOST_DATA_NAMESPACE|LOADER_CAP_PROFILE_LEASE):0);api.host_pid=GetCurrentProcessId();api.on_main_thread=1;api.host_executable=executable.c_str();api.log=log_message;

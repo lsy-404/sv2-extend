@@ -33,18 +33,18 @@ public:
  }
  HANDLE read_handle()const{return reader_;}
  bool publish(HANDLE process,const std::wstring &physical,uint64_t generation,bool requested,bool applied,bool verified){
-  if(!view_||published_||!verified||requested!=applied||physical.empty()||physical.size()>=1024)return false;
+  if(!view_||published_||!verified||!generation||requested!=applied||physical.empty()||physical.size()>=1024)return false;
   uint32_t pid=0;uint64_t creation=0;std::wstring actual;if(!process_identity(process,pid,creation,actual)||CompareStringOrdinal(actual.c_str(),-1,physical.c_str(),-1,TRUE)!=CSTR_EQUAL)return false;
   Record value{};value.magic=record_magic;value.version=1;value.size=sizeof value;value.pid=pid;value.creation=creation;value.generation=generation;value.requested=requested?1u:0u;value.applied=applied?1u:0u;value.verified=1;std::memcpy(value.image,actual.c_str(),(actual.size()+1)*sizeof(wchar_t));
   std::memcpy(view_,&value,sizeof value);published_=true;return true;
  }
- bool seal(){if(!view_||!writer_||!published_||!UnmapViewOfFile(view_))return false;view_=nullptr;if(!CloseHandle(writer_))return false;writer_=nullptr;return true;}
+ bool seal(){if(!view_||!writer_||!UnmapViewOfFile(view_))return false;view_=nullptr;if(!CloseHandle(writer_))return false;writer_=nullptr;return true;}
 };
 inline bool read(HANDLE inherited,Record &output){
  if(!inherited||inherited==INVALID_HANDLE_VALUE)return false;
  const auto view=static_cast<const Record*>(MapViewOfFile(inherited,FILE_MAP_READ,0,0,sizeof(Record)));if(!view)return false;
  Record value{};std::memcpy(&value,view,sizeof value);UnmapViewOfFile(view);
- if(value.magic!=record_magic||value.version!=1||value.size!=sizeof value||value.verified!=1||value.requested>1||value.applied!=value.requested||value.reserved!=0||!wmemchr(value.image,0,1024))return false;
+ if(value.magic!=record_magic||value.version!=1||value.size!=sizeof value||value.verified!=1||!value.generation||value.requested>1||value.applied!=value.requested||value.reserved!=0||!wmemchr(value.image,0,1024))return false;
  uint32_t pid=0;uint64_t creation=0;std::wstring actual;if(!process_identity(GetCurrentProcess(),pid,creation,actual)||value.pid!=pid||value.creation!=creation||CompareStringOrdinal(value.image,-1,actual.c_str(),-1,TRUE)!=CSTR_EQUAL)return false;
  output=value;return true;
 }

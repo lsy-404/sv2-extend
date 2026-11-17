@@ -32,7 +32,7 @@ int wmain(int argc,wchar_t **argv){
  managed_host::State host_state;
  if(managed){auto relative=profile.lexically_relative(host.parent_path());if(!relative.empty()&&*relative.begin()!=L"..")return 78;host_state.prepare(host,profile,core,std::wstring(argv[1])==L"--host");if(std::wstring(argv[1])==L"--host")transient_layout::retire(host_state.data/L"Roaming"/L"Dreamtonics"/L"Synthesizer V Studio 2"/L"settings"/L"settings.xml",profile);host=host_state.host;}
  if(!pe64(host)||!pe64(core)||core.wstring().size()>16000)return 65;
- bool startup_blocked=false;
+ windows_network::State startup_network_state;
  if(managed){
   if(!plugin_storage::install(profile))return 79;startup_policy::Service policy(GetCurrentThreadId());loader_startup_network_state_v1 state{LOADER_ABI_V1,sizeof state,0,0,0,0,0};
   if(policy.state(&state)!=LOADER_OK)return 79;
@@ -43,14 +43,15 @@ int wmain(int argc,wchar_t **argv){
    if(!network.request(state.requested_blocked!=0))return 79;
    const ULONGLONG end=GetTickCount64()+40000;windows_network::State value;
    do{value=network.state();if(!value.pending)break;Sleep(20);}while(GetTickCount64()<end);
-   if(value.pending||value.error||!value.policy_applied||value.applied_blocked!=(state.requested_blocked!=0))return 79;startup_blocked=state.requested_blocked!=0;
+   if(value.pending||value.error||!value.policy_applied||value.applied_blocked!=(state.requested_blocked!=0))return 79;
   }
+  startup_network_state=network.state();
  }
  HMODULE image=LoadLibraryExW(core.c_str(),nullptr,DONT_RESOLVE_DLL_REFERENCES);if(!image)return 66;
  auto entry=GetProcAddress(image,"ExtendInitialize");uintptr_t rva=(uintptr_t)entry-(uintptr_t)image;FreeLibrary(image);if(!entry||rva>UINT32_MAX)return 66;
  // Environment inherited only by this child; launcher exits after initialization.
  SetEnvironmentVariableW(L"OPEN_SV2_LOADER_DATA_DIR",profile.c_str());SetEnvironmentVariableW(L"OPEN_SV2_WINDOWS_FIXTURE",fixture?L"1":nullptr);SetEnvironmentVariableW(L"OPEN_SV2_WINDOWS_MANAGED",managed?L"1":nullptr);
- SetEnvironmentVariableW(L"OPEN_SV2_STARTUP_NETWORK_APPLIED",startup_blocked?L"1":nullptr);
+ SetEnvironmentVariableW(L"OPEN_SV2_NETWORK_BOOTSTRAP_HANDLE",managed?std::to_wstring((uintptr_t)host_state.network_handoff.read_handle()).c_str():nullptr);
  if(managed){SetEnvironmentVariableW(L"OPEN_SV2_HOST_DATA_DIR",host_state.data.c_str());SetEnvironmentVariableW(L"APPDATA",(host_state.data/L"Roaming").c_str());SetEnvironmentVariableW(L"LOCALAPPDATA",(host_state.data/L"Local").c_str());SetEnvironmentVariableW(L"TEMP",(host_state.data/L"Temp").c_str());SetEnvironmentVariableW(L"TMP",(host_state.data/L"Temp").c_str());SetEnvironmentVariableW(L"OPEN_SV2_HOST_JOB_HANDLE",std::to_wstring((uintptr_t)host_state.job_query).c_str());}
  std::wstring command=quoted(host.wstring());for(int i=4;i<argc;i++)command+=L" "+quoted(argv[i]);
  STARTUPINFOEXW startup{};startup.StartupInfo.cb=managed?sizeof startup:sizeof startup.StartupInfo;startup.lpAttributeList=managed?host_state.attributes:nullptr;PROCESS_INFORMATION process{};
@@ -58,6 +59,7 @@ int wmain(int argc,wchar_t **argv){
  Handle child{process.hProcess},thread{process.hThread};bool resumed=false;
  auto fail=[&](int code){TerminateProcess(child.h,DWORD(code));WaitForSingleObject(child.h,5000);return code;};
  if(managed&&!AssignProcessToJobObject(host_state.job,child.h))return fail(76);
+ if(managed){std::wstring physical;if(startup_network_state.policy_applied&&(!windows_network::canonical_executable_path(host.wstring(),physical)||!host_state.network_handoff.publish(child.h,physical,startup_network_state.generation,startup_network_state.requested_blocked,startup_network_state.applied_blocked,true)))return fail(79);if(!host_state.network_handoff.seal())return fail(79);}
  const auto path=core.wstring();const SIZE_T total=sizeof(extend_remote_context)+(path.size()+1)*sizeof(wchar_t);
  auto remote=(BYTE*)VirtualAllocEx(child.h,nullptr,total,MEM_COMMIT|MEM_RESERVE,PAGE_READWRITE);
  auto code=VirtualAllocEx(child.h,nullptr,sizeof extend_apc_blob,MEM_COMMIT|MEM_RESERVE,PAGE_READWRITE);if(!remote||!code)return fail(68);

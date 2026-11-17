@@ -3,6 +3,7 @@
 #include <fstream>
 #include <random>
 #include <stdexcept>
+#include "network_bootstrap.h"
 
 namespace managed_host {
 namespace fs=std::filesystem;
@@ -35,7 +36,7 @@ static void editor_resources(const fs::path &native,const fs::path &data){
 }
 struct State {
  HANDLE lock=INVALID_HANDLE_VALUE,job=nullptr,job_query=nullptr;LPPROC_THREAD_ATTRIBUTE_LIST attributes=nullptr;std::wstring name;fs::path host,data;bool copied=false;
- HANDLE inherited[2]{};
+ HANDLE inherited[3]{};windows_network_bootstrap::Handoff network_handoff;
  ~State(){if(attributes){DeleteProcThreadAttributeList(attributes);HeapFree(GetProcessHeap(),0,attributes);}if(lock!=INVALID_HANDLE_VALUE)CloseHandle(lock);if(job_query)CloseHandle(job_query);if(job)CloseHandle(job);}
  void prepare(const fs::path &original,const fs::path &profile,const fs::path &core,bool migrate){
   inspect(original.parent_path());require(safe(profile),"Profile cannot be a link");inspect(profile);
@@ -53,7 +54,7 @@ struct State {
   if(update){fs::create_directories(runtime.parent_path());auto staging=runtime.parent_path()/(L".host-"+identifier());fs::copy(original.parent_path(),staging,fs::copy_options::recursive);for(const auto &item:fs::recursive_directory_iterator(original.parent_path()))if(item.is_regular_file())stamp_file(item.path(),staging/item.path().lexically_relative(original.parent_path()));if(fs::exists(runtime))fs::rename(runtime,runtime.parent_path()/(L".previous-"+identifier()));fs::rename(staging,runtime);}
   inspect(runtime);host=runtime/original.filename();require(fs::is_regular_file(host),"Managed host missing");
   for(const auto *name:{L"outputs",L"preferences",L"storage"})fs::create_directories(profile/name);
-  job=CreateJobObjectW(nullptr,nullptr);require(job!=nullptr,"Cannot create managed process job");require(DuplicateHandle(GetCurrentProcess(),job,GetCurrentProcess(),&job_query,JOB_OBJECT_QUERY,TRUE,0)!=FALSE,"Cannot create job query handle");inherited[0]=lock;inherited[1]=job_query;SIZE_T size=0;InitializeProcThreadAttributeList(nullptr,1,0,&size);attributes=(LPPROC_THREAD_ATTRIBUTE_LIST)HeapAlloc(GetProcessHeap(),0,size);require(attributes&&InitializeProcThreadAttributeList(attributes,1,0,&size)&&UpdateProcThreadAttribute(attributes,0,PROC_THREAD_ATTRIBUTE_HANDLE_LIST,inherited,sizeof inherited,nullptr,nullptr),"Cannot initialize managed startup");
+  job=CreateJobObjectW(nullptr,nullptr);require(job!=nullptr,"Cannot create managed process job");require(DuplicateHandle(GetCurrentProcess(),job,GetCurrentProcess(),&job_query,JOB_OBJECT_QUERY,TRUE,0)!=FALSE,"Cannot create job query handle");require(network_handoff.create(),"Cannot create network startup handoff");inherited[0]=lock;inherited[1]=job_query;inherited[2]=network_handoff.read_handle();SIZE_T size=0;InitializeProcThreadAttributeList(nullptr,1,0,&size);attributes=(LPPROC_THREAD_ATTRIBUTE_LIST)HeapAlloc(GetProcessHeap(),0,size);require(attributes&&InitializeProcThreadAttributeList(attributes,1,0,&size)&&UpdateProcThreadAttribute(attributes,0,PROC_THREAD_ATTRIBUTE_HANDLE_LIST,inherited,sizeof inherited,nullptr,nullptr),"Cannot initialize managed startup");
  }
 };
 }
