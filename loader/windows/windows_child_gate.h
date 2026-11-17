@@ -33,6 +33,7 @@ inline HINSTANCE WINAPI on_shell(HWND window,LPCWSTR operation,LPCWSTR file,LPCW
  ++current.denied;SetLastError(ERROR_ACCESS_DENIED);return reinterpret_cast<HINSTANCE>(static_cast<INT_PTR>(SE_ERR_ACCESSDENIED));
 }
 inline bool register_helper(const std::wstring &path){std::wstring resolved;if(!physical(path.c_str(),resolved))return false;std::lock_guard<std::recursive_mutex> lock(mutex);try{if(helpers.insert(resolved).second)++current.generation;}catch(...){return false;}return true;}
+inline void unregister_helper(const std::wstring &path){std::lock_guard<std::recursive_mutex> lock(mutex);if(helpers.erase(path))++current.generation;}
 inline void setblocked(bool value){std::lock_guard<std::recursive_mutex> lock(mutex);if(current.blocked!=value){current.blocked=value;++current.generation;}}
 inline State state(){std::lock_guard<std::recursive_mutex> lock(mutex);State out=current;out.helpers=helpers.size();return out;}
 inline bool install(){

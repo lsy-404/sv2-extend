@@ -10,6 +10,8 @@
 #include "early_entry_blob.h"
 #include "managed_host.h"
 #include "transient_layout.h"
+#include "startup_policy.h"
+#include "network_control.h"
 namespace fs=std::filesystem;
 struct Handle{HANDLE h=nullptr;~Handle(){if(h&&h!=INVALID_HANDLE_VALUE)CloseHandle(h);}};
 static bool contains_path(const fs::path &parent,const fs::path &child){auto p=parent.begin(),c=child.begin();for(;p!=parent.end();++p,++c){if(c==child.end()||CompareStringOrdinal(p->c_str(),-1,c->c_str(),-1,TRUE)!=CSTR_EQUAL)return false;}return true;}
@@ -30,10 +32,25 @@ int wmain(int argc,wchar_t **argv){
  managed_host::State host_state;
  if(managed){auto relative=profile.lexically_relative(host.parent_path());if(!relative.empty()&&*relative.begin()!=L"..")return 78;host_state.prepare(host,profile,core,std::wstring(argv[1])==L"--host");if(std::wstring(argv[1])==L"--host")transient_layout::retire(host_state.data/L"Roaming"/L"Dreamtonics"/L"Synthesizer V Studio 2"/L"settings"/L"settings.xml",profile);host=host_state.host;}
  if(!pe64(host)||!pe64(core)||core.wstring().size()>16000)return 65;
+ bool startup_blocked=false;
+ if(managed){
+  if(!plugin_storage::install(profile))return 79;startup_policy::Service policy(GetCurrentThreadId());loader_startup_network_state_v1 state{LOADER_ABI_V1,sizeof state,0,0,0,0,0};
+  if(policy.state(&state)!=LOADER_OK)return 79;
+  windows_network::Controller network(host.wstring());
+  bool needs_change=state.requested_blocked!=0;
+  if(!needs_change&&!network.adopt(false))needs_change=network.adopt(true);
+  if(needs_change){
+   if(!network.request(state.requested_blocked!=0))return 79;
+   const ULONGLONG end=GetTickCount64()+40000;windows_network::State value;
+   do{value=network.state();if(!value.pending)break;Sleep(20);}while(GetTickCount64()<end);
+   if(value.pending||value.error||!value.policy_applied||value.applied_blocked!=(state.requested_blocked!=0))return 79;startup_blocked=state.requested_blocked!=0;
+  }
+ }
  HMODULE image=LoadLibraryExW(core.c_str(),nullptr,DONT_RESOLVE_DLL_REFERENCES);if(!image)return 66;
  auto entry=GetProcAddress(image,"ExtendInitialize");uintptr_t rva=(uintptr_t)entry-(uintptr_t)image;FreeLibrary(image);if(!entry||rva>UINT32_MAX)return 66;
  // Environment inherited only by this child; launcher exits after initialization.
  SetEnvironmentVariableW(L"OPEN_SV2_LOADER_DATA_DIR",profile.c_str());SetEnvironmentVariableW(L"OPEN_SV2_WINDOWS_FIXTURE",fixture?L"1":nullptr);SetEnvironmentVariableW(L"OPEN_SV2_WINDOWS_MANAGED",managed?L"1":nullptr);
+ SetEnvironmentVariableW(L"OPEN_SV2_STARTUP_NETWORK_APPLIED",startup_blocked?L"1":nullptr);
  if(managed){SetEnvironmentVariableW(L"OPEN_SV2_HOST_DATA_DIR",host_state.data.c_str());SetEnvironmentVariableW(L"APPDATA",(host_state.data/L"Roaming").c_str());SetEnvironmentVariableW(L"LOCALAPPDATA",(host_state.data/L"Local").c_str());SetEnvironmentVariableW(L"TEMP",(host_state.data/L"Temp").c_str());SetEnvironmentVariableW(L"TMP",(host_state.data/L"Temp").c_str());SetEnvironmentVariableW(L"OPEN_SV2_HOST_JOB_HANDLE",std::to_wstring((uintptr_t)host_state.job_query).c_str());SetEnvironmentVariableW(L"OPEN_SV2_MCP_PIPE_NAME",host_state.pipe_name.c_str());SetEnvironmentVariableW(L"OPEN_SV2_MCP_PIPE_HANDLE",std::to_wstring((uintptr_t)host_state.pipe).c_str());}
  std::wstring command=quoted(host.wstring());for(int i=4;i<argc;i++)command+=L" "+quoted(argv[i]);
  STARTUPINFOEXW startup{};startup.StartupInfo.cb=managed?sizeof startup:sizeof startup.StartupInfo;startup.lpAttributeList=managed?host_state.attributes:nullptr;PROCESS_INFORMATION process{};

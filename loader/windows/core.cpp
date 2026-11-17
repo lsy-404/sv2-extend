@@ -25,6 +25,11 @@
 #include "voice_service.h"
 #include "export_native_service.h"
 #include "profile_lease.h"
+#include "startup_policy.h"
+#include "network_control.h"
+#include "network_scope.h"
+#include "windows_socket_gate.h"
+#include "windows_child_gate.h"
 using json=nlohmann::json;namespace fs=std::filesystem;
 namespace {
 DWORD main_thread;HWND dispatcher;loader_api_v1 api{};std::string executable,host_directory;fs::path root;json package_results=json::array();bool managed=false,app_container=false;
@@ -33,11 +38,14 @@ std::unique_ptr<script_runtime::Service> script_service;
 std::unique_ptr<voice_service::Service> native_voice;
 std::unique_ptr<export_service::Service> native_export;
 std::unique_ptr<profile_lease::Service> profile_operations;
+std::unique_ptr<startup_policy::Service> startup_network;
+std::unique_ptr<windows_network::Controller> network_controller;
 script_settings::Runtime lua_runtime{&api,"opensv2.lua-extend","Lua Extend",false},js_runtime{&api,"opensv2.javascript-extend","JS Extend",false};
 uint64_t capability_generation=1;
 std::unique_ptr<editor_lua::Service> editor_service;int editor_gate_result=LOADER_ERR_NOT_SUPPORTED,editor_start_result=LOADER_ERR_NOT_SUPPORTED;
 bool editor_online(){return editor_service&&!editor_service->epoch.empty()&&GetTickCount64()-editor_service->heartbeat<=2000;}
 void log_message(const char *);
+void network_tick();
 void category_update(void *pane,const char *id,HWND window,const RECT &bounds,bool visible){native_panel::dock_update(pane,id,window,bounds,visible);}
 void category_remove(void *pane){native_panel::dock_remove(pane);}
 void category_sync(){
@@ -113,10 +121,29 @@ void namespace_receipt(){
  std::ofstream output(root/L"outputs"/L"windows-namespace.json",std::ios::binary|std::ios::trunc);if(!output)return;output<<json{{"mode","shell-entry-detours"},{"hostPid",GetCurrentProcessId()},{"redirectedQueries",data_namespace::redirected.load()},{"otherQueries",data_namespace::other.load()},{"lastOtherCSIDL",data_namespace::last_csidl.load()},{"lastOtherKnownId",data_namespace::last_known.load()}}.dump(2);output.close();if(output)previous=count;
 }
 void editor_receipt(){if(!managed)return;static unsigned attempts=0;static ULONGLONG attempted_at=0;auto now=GetTickCount64();auto state=editor_autostart::status();if(editor_start_result==LOADER_OK&&!state.scan_seen&&editor_autostart::root_ready()&&attempts<20&&now-attempted_at>=500){attempted_at=now;attempts++;editor_autostart::request_initial_scan();state=editor_autostart::status();}json value{{"hostPid",GetCurrentProcessId()},{"getenvGateResult",editor_gate_result},{"autostartResult",editor_start_result},{"installed",state.installed},{"scanSeen",state.scan_seen},{"runRequested",state.run_requested},{"scanAttempts",attempts},{"initialScanReason",state.initial_scan_reason},{"editorReady",editor_online()}};static std::string previous;auto body=value.dump(2);if(body==previous)return;std::ofstream output(root/L"outputs"/L"windows-editor.json",std::ios::binary|std::ios::trunc);if(!output)return;output<<body;output.close();if(output)previous=body;}
-LRESULT CALLBACK window_proc(HWND window,UINT message,WPARAM w,LPARAM l){if(message==WM_APP+2){native_panel::drain();return 0;}if(message==WM_APP+1){dispatch_request((Request*)l);return 0;}if(message==WM_TIMER){native_panel::drain();if(native_voice)native_voice->tick();if(native_export)native_export->tick();if(editor_service)editor_service->tick();std::vector<Request*> expired;{std::lock_guard<std::mutex> guard(requests_mutex);for(auto &r:requests)if(!r->delivered&&GetTickCount64()>=r->deadline)expired.push_back(r.get());}for(auto r:expired)error(r,"TIMEOUT");category_tick();namespace_receipt();editor_receipt();return 0;}return DefWindowProcW(window,message,w,l);}
-int network_state(loader_network_state_v1 *state){if(!state||state->abi_version!=1||state->struct_size<sizeof *state)return LOADER_ERR_INVALID;*state={1,sizeof *state,1,0,LOADER_NET_WINHTTP|LOADER_NET_WININET|LOADER_NET_WINSOCK|LOADER_NET_WEBVIEW2,0,0,0,0};return 0;}
-int verify(uint64_t generation,loader_network_state_v1 *state){int result=network_state(state);if(result)return result;return generation!=state->generation?LOADER_ERR_STALE_GENERATION:LOADER_ERR_NETWORK_UNVERIFIED;}
-int block(int){return LOADER_ERR_NOT_SUPPORTED;}int blocked(){return 0;}
+LRESULT CALLBACK window_proc(HWND window,UINT message,WPARAM w,LPARAM l){if(message==WM_APP+2){native_panel::drain();return 0;}if(message==WM_APP+1){dispatch_request((Request*)l);return 0;}if(message==WM_TIMER){network_tick();native_panel::drain();if(native_voice)native_voice->tick();if(native_export)native_export->tick();if(editor_service)editor_service->tick();std::vector<Request*> expired;{std::lock_guard<std::mutex> guard(requests_mutex);for(auto &r:requests)if(!r->delivered&&GetTickCount64()>=r->deadline)expired.push_back(r.get());}for(auto r:expired)error(r,"TIMEOUT");category_tick();namespace_receipt();editor_receipt();return 0;}return DefWindowProcW(window,message,w,l);}
+void network_tick(){if(network_controller){auto state=network_controller->state();if(state.policy_applied&&!state.pending&&!state.error&&!state.applied_blocked){windows_socket_gate::setblocked(false);windows_child_gate::setblocked(false);}}}
+int network_policy(loader_network_policy_state_v1 *state){
+ if(!on_main()||!state||state->abi_version!=LOADER_ABI_V1||state->struct_size<sizeof *state)return LOADER_ERR_INVALID;
+ if(!network_controller)return LOADER_ERR_NOT_SUPPORTED;network_tick();auto value=network_controller->state();
+ *state={LOADER_ABI_V1,sizeof *state,value.generation,value.requested_blocked?1u:0u,value.applied_blocked?1u:0u,value.pending?1u:0u,value.error?value.error:(!value.policy_applied&&!value.pending?LOADER_ERR_NETWORK_UNVERIFIED:0)};return LOADER_OK;
+}
+int network_state(loader_network_state_v1 *state){
+ if(!on_main()||!state||state->abi_version!=LOADER_ABI_V1||state->struct_size<sizeof *state)return LOADER_ERR_INVALID;
+ if(!network_controller)return LOADER_ERR_NOT_SUPPORTED;network_tick();auto policy=network_controller->state();auto sockets=windows_socket_gate::state();auto children=windows_child_gate::state();auto scope=network_scope::job();auto actual=network_scope::connections(GetCurrentProcessId());auto children_after=windows_child_gate::state();
+ uint32_t connections=actual.tcp4_active+actual.tcp6_active+actual.udp4_active+actual.udp6_active;
+ bool drained=sockets.installed&&sockets.blocked&&!sockets.pending&&!sockets.discovery_error&&!sockets.active&&!sockets.unknown&&!sockets.close_failed&&actual.complete&&!connections;
+ bool child_scope=children.installed&&children.blocked&&scope.child_scope&&children.generation==children_after.generation&&editor_gate_result==LOADER_OK;
+ uint64_t unverified=child_scope?0:LOADER_NET_WEBVIEW2|LOADER_NET_WEBRTC;
+ if(!policy.policy_applied||!policy.applied_blocked||policy.pending||policy.error)unverified|=LOADER_NET_WINHTTP|LOADER_NET_WININET|LOADER_NET_WINSOCK;
+ if(!drained)unverified|=LOADER_NET_WINSOCK;
+ bool verified=policy.requested_blocked&&policy.policy_applied&&policy.applied_blocked&&!policy.pending&&!policy.error&&drained&&child_scope;
+ uint64_t intercepted=sockets.installed?LOADER_NET_WINSOCK:0;if(policy.policy_applied&&policy.applied_blocked)intercepted|=LOADER_NET_WINHTTP|LOADER_NET_WININET;if(child_scope)intercepted|=LOADER_NET_WEBVIEW2|LOADER_NET_WEBRTC;
+ *state={LOADER_ABI_V1,sizeof *state,policy.generation,intercepted,unverified,policy.requested_blocked?1u:0u,connections+scope.child_count,drained?1u:0u,verified?1u:0u};return LOADER_OK;
+}
+int verify(uint64_t generation,loader_network_state_v1 *state){int result=network_state(state);if(result)return result;if(generation!=state->generation)return LOADER_ERR_STALE_GENERATION;return state->whole_host_verified?LOADER_OK:LOADER_ERR_NETWORK_UNVERIFIED;}
+int block(int value){if(!on_main()||(value!=0&&value!=1))return LOADER_ERR_INVALID;if(!network_controller)return LOADER_ERR_NOT_SUPPORTED;if(!network_controller->request(value!=0))return LOADER_ERR_PROFILE_BUSY;if(value){windows_child_gate::setblocked(true);windows_socket_gate::setblocked(true);}return LOADER_OK;}
+int blocked(){return network_controller&&network_controller->state().requested_blocked?1:0;}
 int http(const char*,loader_http_completion done,void *context){if(done)done(0,LOADER_ERR_NOT_SUPPORTED,nullptr,0,context);return LOADER_ERR_NOT_SUPPORTED;}
 int storage(const char*,const uint8_t*,size_t){return LOADER_ERR_NOT_SUPPORTED;}
 int storage_scoped(const char *id,const char *key,const uint8_t *bytes,size_t length){return plugin_storage::write(id,key,bytes,length);}
@@ -126,9 +153,9 @@ int unregister_editor(loader_editor_dispatch,void*){return LOADER_ERR_NOT_SUPPOR
 int listen(const char*,loader_http_json_handler,void*,loader_http_endpoint_v1*){return LOADER_ERR_NOT_SUPPORTED;}
 int stop(const char*,loader_http_json_handler,void*){return LOADER_ERR_NOT_SUPPORTED;}
 const char *host_data(){return managed?host_directory.c_str():nullptr;}
-int guard(const char*,const char*,int){return LOADER_ERR_NOT_SUPPORTED;}
-int policy(loader_startup_network_state_v1*){return LOADER_ERR_NOT_SUPPORTED;}
-void guards(const char*,loader_json_completion done,void *context){const char body[]="{\"ok\":false,\"error\":{\"code\":\"NOT_SUPPORTED\"}}";if(done)done(body,sizeof body-1,context);}
+int guard(const char *owner,const char *id,int enabled){return startup_network?startup_network->set(owner,id,enabled):LOADER_ERR_NOT_SUPPORTED;}
+int policy(loader_startup_network_state_v1 *state){return startup_network?startup_network->state(state):LOADER_ERR_NOT_SUPPORTED;}
+void guards(const char *owner,loader_json_completion done,void *context){if(!done)return;auto value=startup_network?startup_network->list(owner):json{{"ok",false},{"error",{{"code","NOT_SUPPORTED"}}}};auto body=value.dump();done(body.data(),body.size(),context);}
 int acquire_profile(const char *owner,const char *operation){
  if(!on_main()||!profile_operations)return LOADER_ERR_INVALID;
  bool busy=native_export&&(!native_export->active.empty()||native_export->recovery_required);
@@ -158,9 +185,17 @@ void load_packages(){
    bool valid=true;auto cursor=package;for(const auto &part:path){if(part==L".."||part==L"."){valid=false;break;}cursor/=part;if(!regular(cursor,cursor!=package/path)){valid=false;break;}}
    if(!valid)continue;
    auto absolute=(package/path).lexically_normal();auto base=package.lexically_normal();auto rel=absolute.lexically_relative(base);if(rel.empty()||*rel.begin()==L"..")continue;
+   std::vector<std::wstring> helper_paths;
+   if(definition.contains("nativeHelpers")){
+    if(!definition["nativeHelpers"].is_object())continue;auto helpers=definition["nativeHelpers"].value(key,json::array());if(!helpers.is_array()||helpers.size()>8)continue;bool helper_valid=true;
+    for(const auto &entry:helpers){if(!entry.is_string()){helper_valid=false;break;}auto text=entry.get<std::string>();fs::path helper=fs::u8path(text);if(text.empty()||text.size()>512||text.find(':')!=std::string::npos||helper.is_absolute()||helper.extension()!=L".exe"){helper_valid=false;break;}auto cursor=package;for(const auto &part:helper){if(part==L".."||part==L"."){helper_valid=false;break;}cursor/=part;if(!regular(cursor,cursor!=package/helper)){helper_valid=false;break;}}std::wstring physical;if(!helper_valid||!windows_network::canonical_executable_path((package/helper).wstring(),physical)){helper_valid=false;break;}helper_paths.push_back(std::move(physical));}
+    if(!helper_valid)continue;
+   }
    auto module=LoadLibraryExW(absolute.c_str(),nullptr,LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR|LOAD_LIBRARY_SEARCH_SYSTEM32);if(!module){package_results.push_back({{"id",id},{"loaded",false}});log_message("package-load-failed");continue;}
+   bool helpers_registered=true;for(const auto &helper:helper_paths)if(!windows_child_gate::register_helper(helper)){helpers_registered=false;break;}if(!helpers_registered){for(const auto &helper:helper_paths)windows_child_gate::unregister_helper(helper);FreeLibrary(module);package_results.push_back({{"id",id},{"loaded",false}});log_message("package-helper-registration-failed");continue;}
    modules.push_back(module);ids.insert(id);count++;auto initialize=(loader_plugin_init_v1_fn)GetProcAddress(module,"loader_plugin_init_v1");int result=initialize?initialize(&api):LOADER_ERR_INVALID;package_results.push_back({{"id",id},{"loaded",true},{"initResult",result}});log_message(result==0?"package-resident-ready":"package-init-failed");
-   if(result==LOADER_ERR_STORAGE_IO){startup_receipt();log_message("startup-storage-integrity-failed");TerminateProcess(GetCurrentProcess(),ERROR_DLL_INIT_FAILED);ExitProcess(ERROR_DLL_INIT_FAILED);}
+   if(result!=LOADER_OK)for(const auto &helper:helper_paths)windows_child_gate::unregister_helper(helper);
+   if(result==LOADER_ERR_STORAGE_IO||result==LOADER_ERR_POLICY_INVALID){startup_receipt();log_message("startup-policy-or-storage-failed");TerminateProcess(GetCurrentProcess(),ERROR_DLL_INIT_FAILED);ExitProcess(ERROR_DLL_INIT_FAILED);}
   }catch(const std::exception&){log_message("package-invalid");}
  }
 }
@@ -182,12 +217,20 @@ extern "C" __declspec(dllexport) int ExtendInitialize(void*){
  if(!RegisterClassW(&cls))return LOADER_ERR_INVALID;
  dispatcher=CreateWindowExW(0,cls.lpszClassName,L"",0,0,0,0,0,HWND_MESSAGE,nullptr,cls.hInstance,nullptr);if(!dispatcher||!SetTimer(dispatcher,1,100,nullptr)||native_panel::install(dispatcher,root.c_str())!=LOADER_OK)return LOADER_ERR_INVALID;
  wchar_t host[32768];DWORD n=GetModuleFileNameW(nullptr,host,32768);if(!n||n>=32768)return LOADER_ERR_INVALID;executable=fs::path(host).u8string();
+ if(managed){
+  startup_network=std::make_unique<startup_policy::Service>(main_thread);loader_startup_network_state_v1 startup{LOADER_ABI_V1,sizeof startup,0,0,0,0,0};
+  if(startup_network->state(&startup)!=LOADER_OK||!windows_socket_gate::install()||!windows_child_gate::install())return LOADER_ERR_POLICY_INVALID;
+  network_controller=std::make_unique<windows_network::Controller>(host);
+  if(startup.requested_blocked){if(!flag_enabled(L"OPEN_SV2_STARTUP_NETWORK_APPLIED")||!network_controller->adopt(true)||!windows_socket_gate::setblocked(true))return LOADER_ERR_POLICY_INVALID;startup_network->mark_applied();}
+  else{network_controller->adopt(false);windows_child_gate::setblocked(false);}
+ }
  profile_operations=std::make_unique<profile_lease::Service>(main_thread,managed);
  api.abi_version=1;api.struct_size=sizeof api;api.capabilities=LOADER_CAP_NETWORK_STATE|LOADER_CAP_PLUGIN_UI|LOADER_CAP_SCOPED_STORAGE|(managed?(LOADER_CAP_HOST_DATA_NAMESPACE|LOADER_CAP_PROFILE_LEASE):0);api.host_pid=GetCurrentProcessId();api.on_main_thread=1;api.host_executable=executable.c_str();api.log=log_message;
  api.set_host_network_blocked=block;api.host_network_blocked=blocked;api.plugin_http_get=http;api.get_host_network_state=network_state;api.verify_host_network_quiescence=verify;api.plugin_storage_write=storage;
  api.register_editor_adapter=register_editor;api.unregister_editor_adapter=unregister_editor;api.editor_request_json=request;api.request_capability_json=request;api.register_capability_provider=register_provider;api.unregister_capability_provider=unregister_provider;
  api.listen_local_json=listen;api.stop_local_json=stop;api.host_data_directory=host_data;api.register_plugin_ui=native_panel::register_ui;api.unregister_plugin_ui=native_panel::unregister_ui;api.update_plugin_ui=native_panel::update_ui;
  api.set_startup_network_guard=guard;api.get_startup_network_policy=policy;api.list_startup_network_guards=guards;api.acquire_profile_exclusive=acquire_profile;api.release_profile_exclusive=release_profile;api.get_profile_lease_state=lease_state;api.retire_host_web_renderers=retire_web;api.retire_host_web_contexts=retire_web;api.plugin_storage_write_scoped=storage_scoped;api.plugin_storage_read_scoped=storage_read;
+ api.get_host_network_policy=network_policy;if(managed)api.capabilities|=LOADER_CAP_NETWORK_POLICY_SWITCH|LOADER_CAP_STARTUP_NETWORK_GUARD;
  if(managed){editor_service=std::make_unique<editor_lua::Service>(&api);editor_gate_result=editor_gate::install(editor_service.get());if(editor_gate_result==LOADER_OK){auto entry=root/L"host-data"/L"Roaming"/L"Dreamtonics"/L"Synthesizer V Studio 2"/L"scripts"/L"opensv2-loader-runtime.lua";editor_start_result=editor_autostart::install(editor_service.get(),entry.c_str());}}
  native_panel::set_categories_changed(category_sync);native_panel::set_open_category(native_category_registry::open_category);
  script_service=std::make_unique<script_runtime::Service>(&api);editor_gate::set_router(script_call);

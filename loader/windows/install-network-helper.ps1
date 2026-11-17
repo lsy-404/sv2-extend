@@ -51,7 +51,7 @@ $scheduler.Connect()
 $folder = $scheduler.GetFolder('\')
 if ([IO.Directory]::Exists($directory) -or [IO.File]::Exists($directory)) { throw 'Network helper directory already exists' }
 foreach ($rule in $policy.Rules) { if ($rule.Name -eq $ruleName) { throw 'Network rule already exists' } }
-foreach ($name in $taskNames) { try { $null = $folder.GetTask($name); throw 'Network task already exists' } catch [System.Runtime.InteropServices.COMException] { if ($_.Exception.HResult -ne -2147024894) { throw } } }
+foreach ($task in $folder.GetTasks(0)) { if ($taskNames -contains $task.Name) { throw 'Network task already exists' } }
 $createdTasks = [Collections.Generic.List[string]]::new()
 $createdRule = $false
 $createdDirectory = $false
