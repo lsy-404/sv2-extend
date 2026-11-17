@@ -15,7 +15,10 @@ int main(){
  voice_adapter::stubDelay=550;voice_adapter::deliver(reference);voice_adapter::stubDelay=0;auto end=service.call("voice.capture.end",{{"token",token}});assert(end["ok"]&&end["result"]["assigned"]==false);assert(service.captured.is_null()&&service.token.empty());
  assert(service.call("voice.select.begin",{{"voicebankId","bad"},{"expectedIdentityKey",std::string(64,'a')},{"expectedReferenceKey",std::string(64,'b')}})["error"]["code"]=="INVALID_ARGUMENT");
  auto status=service.call("voice.native_status",json::object());assert(status["result"]["identityReadable"]==true&&status["result"]["selectable"]==false&&status["result"]["catalogReadable"]==false);
- assert(voice_adapter::begin(voice_service::Service::observe,&service,true));voice_adapter::deliver(reference);voice_adapter::deliver(reference);assert(voice_adapter::finish());
+ service.selection=json::object();service.token="completed-selection";service.deadline=GetTickCount64()+500;
+ auto completeSelection=[](void*,void *context){auto &self=*static_cast<voice_service::Service*>(context);self.result=voice_service::Service::success({{"undoRecordCreated",true}});self.deadline=GetTickCount64()+15000;};
+ assert(voice_adapter::begin(completeSelection,&service,true));voice_adapter::stubDelay=550;voice_adapter::deliver(reference);voice_adapter::stubDelay=0;voice_adapter::deliver(reference);
+ auto selected=service.call("voice.select.end",{{"token","completed-selection"}});assert(selected["ok"]&&selected["result"]["undoRecordCreated"]);
  begin=service.call("voice.capture.begin",json::object());token=begin["result"]["token"];voice_adapter::deliver(reference);voice_adapter::deliver(reference);end=service.call("voice.capture.end",{{"token",token}});assert(!end["ok"]&&end["error"]["code"]=="VOICE_CAPTURE_MISSING_OR_AMBIGUOUS");assert(service.captured.is_null());
  begin=service.call("voice.capture.begin",json::object());assert(begin["ok"]);voice_adapter::deliver(reference);service.deadline=GetTickCount64()-1;service.tick();assert(service.token.empty()&&service.captured.is_null()&&!voice_adapter::stubObserver);
 }
