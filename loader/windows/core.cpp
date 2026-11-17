@@ -30,6 +30,9 @@
 #include "network_scope.h"
 #include "windows_socket_gate.h"
 #include "windows_child_gate.h"
+#include "windows_host_navigation.h"
+#include "windows_webview_gate.h"
+#include "windows_web_retirement.h"
 #include "network_bootstrap.h"
 using json=nlohmann::json;namespace fs=std::filesystem;
 namespace {
@@ -42,12 +45,14 @@ std::unique_ptr<profile_lease::Service> profile_operations;
 std::unique_ptr<startup_policy::Service> startup_network;
 std::unique_ptr<windows_network::Controller> network_controller;
 windows_network::State bootstrap_network_state;bool network_initialization_attempted=false;
+windows_web_retirement::Service web_retirement;bool web_retirement_polling=false;
 script_settings::Runtime lua_runtime{&api,"opensv2.lua-extend","Lua Extend",false},js_runtime{&api,"opensv2.javascript-extend","JS Extend",false};
 uint64_t capability_generation=1;
 std::unique_ptr<editor_lua::Service> editor_service;int editor_gate_result=LOADER_ERR_NOT_SUPPORTED,editor_start_result=LOADER_ERR_NOT_SUPPORTED;
 bool editor_online(){return editor_service&&!editor_service->epoch.empty()&&GetTickCount64()-editor_service->heartbeat<=2000;}
 void log_message(const char *);
 void network_tick();
+void web_retirement_tick();
 void category_update(void *pane,const char *id,HWND window,const RECT &bounds,bool visible){native_panel::dock_update(pane,id,window,bounds,visible);}
 void category_remove(void *pane){native_panel::dock_remove(pane);}
 bool category_sync_pending=false;
@@ -124,14 +129,15 @@ void namespace_receipt(){
  std::ofstream output(root/L"outputs"/L"windows-namespace.json",std::ios::binary|std::ios::trunc);if(!output)return;output<<json{{"mode","shell-entry-detours"},{"hostPid",GetCurrentProcessId()},{"redirectedQueries",data_namespace::redirected.load()},{"otherQueries",data_namespace::other.load()},{"lastOtherCSIDL",data_namespace::last_csidl.load()},{"lastOtherKnownId",data_namespace::last_known.load()}}.dump(2);output.close();if(output)previous=count;
 }
 void editor_receipt(){if(!managed)return;static unsigned attempts=0;static ULONGLONG attempted_at=0;auto now=GetTickCount64();auto state=editor_autostart::status();if(editor_start_result==LOADER_OK&&!state.scan_seen&&editor_autostart::root_ready()&&attempts<20&&now-attempted_at>=500){attempted_at=now;attempts++;editor_autostart::request_initial_scan();state=editor_autostart::status();}json value{{"hostPid",GetCurrentProcessId()},{"getenvGateResult",editor_gate_result},{"autostartResult",editor_start_result},{"installed",state.installed},{"scanSeen",state.scan_seen},{"runRequested",state.run_requested},{"scanAttempts",attempts},{"initialScanReason",state.initial_scan_reason},{"editorReady",editor_online()}};static std::string previous;auto body=value.dump(2);if(body==previous)return;std::ofstream output(root/L"outputs"/L"windows-editor.json",std::ios::binary|std::ios::trunc);if(!output)return;output<<body;output.close();if(output)previous=body;}
-LRESULT CALLBACK window_proc(HWND window,UINT message,WPARAM w,LPARAM l){if(message==WM_APP+2){native_panel::drain();return 0;}if(message==WM_APP+1){dispatch_request((Request*)l);return 0;}if(message==WM_TIMER){network_tick();native_panel::drain();if(native_voice)native_voice->tick();if(native_export)native_export->tick();if(editor_service)editor_service->tick();std::vector<Request*> expired;{std::lock_guard<std::mutex> guard(requests_mutex);for(auto &r:requests)if(!r->delivered&&GetTickCount64()>=r->deadline)expired.push_back(r.get());}for(auto r:expired)error(r,"TIMEOUT");category_tick();namespace_receipt();editor_receipt();return 0;}return DefWindowProcW(window,message,w,l);}
+LRESULT CALLBACK window_proc(HWND window,UINT message,WPARAM w,LPARAM l){if(message==windows_host_navigation::message)return windows_host_navigation::receive(l);if(message==WM_APP+4){network_tick();return 0;}if(message==WM_APP+2){native_panel::drain();return 0;}if(message==WM_APP+1){dispatch_request((Request*)l);return 0;}if(message==WM_TIMER){network_tick();native_panel::drain();if(native_voice)native_voice->tick();if(native_export)native_export->tick();if(editor_service)editor_service->tick();std::vector<Request*> expired;{std::lock_guard<std::mutex> guard(requests_mutex);for(auto &r:requests)if(!r->delivered&&GetTickCount64()>=r->deadline)expired.push_back(r.get());}for(auto r:expired)error(r,"TIMEOUT");category_tick();namespace_receipt();editor_receipt();return 0;}return DefWindowProcW(window,message,w,l);}
 void network_tick(){
  if(managed&&!network_initialization_attempted&&editor_autostart::root_ready()){
   network_initialization_attempted=true;
   try{auto host=fs::u8path(executable).wstring();network_controller=std::make_unique<windows_network::Controller>(host,bootstrap_network_state.generation);network_controller->adopt(bootstrap_network_state.requested_blocked);}
   catch(const std::exception&){bootstrap_network_state.policy_applied=false;bootstrap_network_state.error=LOADER_ERR_NETWORK_UNVERIFIED;log_message("network-controller-initialization-failed");}
  }
- if(network_controller){auto state=network_controller->state();if(state.policy_applied&&!state.pending&&!state.error&&!state.applied_blocked){windows_socket_gate::setblocked(false);windows_child_gate::setblocked(false);}}
+ if(network_controller){auto state=network_controller->state();if(state.policy_applied&&!state.pending&&!state.error&&!state.applied_blocked){windows_socket_gate::setblocked(false);windows_child_gate::setblocked(false);windows_webview_gate::setblocked(false);}}
+ web_retirement_tick();
 }
 int network_policy(loader_network_policy_state_v1 *state){
  if(!on_main()||!state||state->abi_version!=LOADER_ABI_V1||state->struct_size<sizeof *state)return LOADER_ERR_INVALID;
@@ -140,10 +146,10 @@ int network_policy(loader_network_policy_state_v1 *state){
 }
 int network_state(loader_network_state_v1 *state){
  if(!on_main()||!state||state->abi_version!=LOADER_ABI_V1||state->struct_size<sizeof *state)return LOADER_ERR_INVALID;
- if(!managed)return LOADER_ERR_NOT_SUPPORTED;network_tick();auto policy=network_controller?network_controller->state():bootstrap_network_state;auto sockets=windows_socket_gate::state();auto children=windows_child_gate::state();auto scope=network_scope::job();auto actual=network_scope::connections(GetCurrentProcessId());auto children_after=windows_child_gate::state();
+ if(!managed)return LOADER_ERR_NOT_SUPPORTED;network_tick();auto policy=network_controller?network_controller->state():bootstrap_network_state;auto sockets=windows_socket_gate::state();auto children=windows_child_gate::state();auto web=windows_webview_gate::state();auto scope=network_scope::job();auto actual=network_scope::connections(GetCurrentProcessId());auto children_after=windows_child_gate::state();
  uint32_t connections=actual.tcp4_active+actual.tcp6_active+actual.udp4_active+actual.udp6_active;
  bool drained=sockets.installed&&sockets.blocked&&!sockets.pending&&!sockets.discovery_error&&!sockets.active&&!sockets.unknown&&!sockets.close_failed&&actual.complete&&!connections;
- bool child_scope=children.installed&&children.blocked&&scope.child_scope&&children.generation==children_after.generation&&editor_gate_result==LOADER_OK;
+ bool child_scope=children.installed&&children.blocked&&scope.child_scope&&children.generation==children_after.generation&&editor_gate_result==LOADER_OK&&web.installed&&web.blocked&&web.factoryBound&&web.coverage&&!web.pendingEnvironment&&!web.pendingController&&!web.controllers;
  uint64_t unverified=child_scope?0:LOADER_NET_WEBVIEW2|LOADER_NET_WEBRTC;
  if(!policy.policy_applied||!policy.applied_blocked||policy.pending||policy.error)unverified|=LOADER_NET_WINHTTP|LOADER_NET_WININET|LOADER_NET_WINSOCK;
  if(!drained)unverified|=LOADER_NET_WINSOCK;
@@ -152,7 +158,7 @@ int network_state(loader_network_state_v1 *state){
  *state={LOADER_ABI_V1,sizeof *state,policy.generation,intercepted,unverified,policy.requested_blocked?1u:0u,connections+scope.child_count,drained?1u:0u,verified?1u:0u};return LOADER_OK;
 }
 int verify(uint64_t generation,loader_network_state_v1 *state){int result=network_state(state);if(result)return result;if(generation!=state->generation)return LOADER_ERR_STALE_GENERATION;return state->whole_host_verified?LOADER_OK:LOADER_ERR_NETWORK_UNVERIFIED;}
-int block(int value){if(!on_main()||(value!=0&&value!=1))return LOADER_ERR_INVALID;network_tick();if(!network_controller)return LOADER_ERR_PROFILE_BUSY;if(!network_controller->request(value!=0))return LOADER_ERR_PROFILE_BUSY;if(value){windows_child_gate::setblocked(true);windows_socket_gate::setblocked(true);}return LOADER_OK;}
+int block(int value){if(!on_main()||(value!=0&&value!=1))return LOADER_ERR_INVALID;network_tick();if(!network_controller)return LOADER_ERR_PROFILE_BUSY;if(!network_controller->request(value!=0))return LOADER_ERR_PROFILE_BUSY;if(value){windows_webview_gate::setblocked(true);windows_child_gate::setblocked(true);windows_socket_gate::setblocked(true);}return LOADER_OK;}
 int blocked(){return (network_controller?network_controller->state():bootstrap_network_state).requested_blocked?1:0;}
 int http(const char*,loader_http_completion done,void *context){if(done)done(0,LOADER_ERR_NOT_SUPPORTED,nullptr,0,context);return LOADER_ERR_NOT_SUPPORTED;}
 int storage(const char*,const uint8_t*,size_t){return LOADER_ERR_NOT_SUPPORTED;}
@@ -174,7 +180,23 @@ int acquire_profile(const char *owner,const char *operation){
 }
 int release_profile(const char *owner,const char *operation){if(!on_main()||!profile_operations)return LOADER_ERR_INVALID;int result=profile_operations->release(owner,operation);if(result==LOADER_OK&&native_export)native_export->profile_exclusive=profile_operations->exclusive();return result;}
 int lease_state(loader_profile_lease_state_v1 *state){return profile_operations?profile_operations->state(state):LOADER_ERR_NOT_SUPPORTED;}
-int retire_web(uint64_t,loader_json_completion,void*){return LOADER_ERR_NOT_SUPPORTED;}
+windows_web_retirement::Observation web_observation(){
+ windows_web_retirement::Observation o;auto policy=network_controller?network_controller->state():bootstrap_network_state;
+ o.networkGeneration=policy.generation;o.requested=policy.requested_blocked;o.policyApplied=policy.policy_applied&&policy.applied_blocked;o.policyPending=policy.pending;o.policyError=policy.error!=0;o.now=GetTickCount64();
+ loader_profile_lease_state_v1 lease{LOADER_ABI_V1,sizeof lease,0,0,0};if(profile_operations&&profile_operations->state(&lease)==LOADER_OK){o.exclusive=lease.mode==LOADER_PROFILE_LEASE_EXCLUSIVE&&lease.host_pid==int32_t(GetCurrentProcessId());o.leaseGeneration=lease.generation;}
+ auto web=windows_webview_gate::state();auto before=windows_child_gate::state();auto job=network_scope::job();auto after=windows_child_gate::state();
+ o.gateBlocked=web.installed&&web.blocked&&before.installed&&before.blocked;o.coverage=web.coverage&&web.factoryBound;o.pending=web.pendingEnvironment||web.pendingController;o.controllers=web.controllers!=0;o.jobKnown=job.error==ERROR_SUCCESS&&job.self_present;o.jobEmpty=job.child_scope;o.childrenStable=before.generation==after.generation;return o;
+}
+void web_retirement_tick(){
+ if(!web_retirement.active()||web_retirement_polling)return;web_retirement_polling=true;
+ auto before=web_observation();bool attempted=web_retirement.may_retire(before);bool complete=attempted&&windows_webview_gate::retire();
+ auto after=web_observation();if(attempted&&!complete)after.pending=true;web_retirement.tick(after);web_retirement_polling=false;
+}
+int retire_renderer(uint64_t,loader_json_completion,void*){return LOADER_ERR_NOT_SUPPORTED;}
+int retire_web(uint64_t expected,loader_json_completion done,void *context){
+ if(!on_main()||!done)return LOADER_ERR_INVALID;if(!managed||!windows_webview_gate::state().installed)return LOADER_ERR_NOT_SUPPORTED;
+ int result=web_retirement.start(expected,web_observation(),done,context);if(result==LOADER_OK)PostMessageW(dispatcher,WM_APP+4,0,0);return result;
+}
 bool regular(const fs::path &path,bool directory=false){std::error_code error;auto status=fs::symlink_status(path,error);if(error||fs::is_symlink(status))return false;DWORD attr=GetFileAttributesW(path.c_str());return attr!=INVALID_FILE_ATTRIBUTES&&!(attr&FILE_ATTRIBUTE_REPARSE_POINT)&&(directory?fs::is_directory(status):fs::is_regular_file(status));}
 void startup_receipt();
 void load_packages(){
@@ -226,23 +248,25 @@ extern "C" __declspec(dllexport) int ExtendInitialize(void*){
  WNDCLASSW cls{};cls.lpfnWndProc=window_proc;cls.hInstance=GetModuleHandleW(nullptr);cls.lpszClassName=L"SV2Extend.Resident.Dispatch.v1";
  if(!RegisterClassW(&cls))return LOADER_ERR_INVALID;
  dispatcher=CreateWindowExW(0,cls.lpszClassName,L"",0,0,0,0,0,HWND_MESSAGE,nullptr,cls.hInstance,nullptr);if(!dispatcher||!SetTimer(dispatcher,1,100,nullptr)||native_panel::install(dispatcher,root.c_str())!=LOADER_OK)return LOADER_ERR_INVALID;
+ windows_host_navigation::install(dispatcher,main_thread);
  wchar_t host[32768];DWORD n=GetModuleFileNameW(nullptr,host,32768);if(!n||n>=32768)return LOADER_ERR_INVALID;executable=fs::path(host).u8string();
  if(managed){
   startup_network=std::make_unique<startup_policy::Service>(main_thread);loader_startup_network_state_v1 startup{LOADER_ABI_V1,sizeof startup,0,0,0,0,0};
-  if(startup_network->state(&startup)!=LOADER_OK||!windows_socket_gate::install()||!windows_child_gate::install())return LOADER_ERR_POLICY_INVALID;
+  if(startup_network->state(&startup)!=LOADER_OK||!windows_socket_gate::install()||!windows_child_gate::install()||!windows_webview_gate::install())return LOADER_ERR_POLICY_INVALID;
+  windows_child_gate::navigation=windows_host_navigation::route;
   wchar_t handle[32]{};DWORD length=GetEnvironmentVariableW(L"OPEN_SV2_NETWORK_BOOTSTRAP_HANDLE",handle,32);wchar_t *end=nullptr;auto raw=length&&length<32?_wcstoui64(handle,&end,10):0;windows_network_bootstrap::Record receipt;
   bool observed=raw&&end&&!*end&&windows_network_bootstrap::read(reinterpret_cast<HANDLE>(uintptr_t(raw)),receipt);
   if(observed){bootstrap_network_state.generation=receipt.generation;bootstrap_network_state.requested_blocked=receipt.requested!=0;bootstrap_network_state.applied_blocked=receipt.applied!=0;bootstrap_network_state.policy_applied=true;}
   if(startup.requested_blocked){if(!observed||!receipt.requested||!receipt.applied||!windows_socket_gate::setblocked(true))return LOADER_ERR_POLICY_INVALID;startup_network->mark_applied();}
-  else{bootstrap_network_state.requested_blocked=false;windows_child_gate::setblocked(false);}
+  else{bootstrap_network_state.requested_blocked=false;windows_child_gate::setblocked(false);windows_webview_gate::setblocked(false);}
  }
  profile_operations=std::make_unique<profile_lease::Service>(main_thread,managed);
  api.abi_version=1;api.struct_size=sizeof api;api.capabilities=LOADER_CAP_NETWORK_STATE|LOADER_CAP_PLUGIN_UI|LOADER_CAP_SCOPED_STORAGE|(managed?(LOADER_CAP_HOST_DATA_NAMESPACE|LOADER_CAP_PROFILE_LEASE):0);api.host_pid=GetCurrentProcessId();api.on_main_thread=1;api.host_executable=executable.c_str();api.log=log_message;
  api.set_host_network_blocked=block;api.host_network_blocked=blocked;api.plugin_http_get=http;api.get_host_network_state=network_state;api.verify_host_network_quiescence=verify;api.plugin_storage_write=storage;
  api.register_editor_adapter=register_editor;api.unregister_editor_adapter=unregister_editor;api.editor_request_json=request;api.request_capability_json=request;api.register_capability_provider=register_provider;api.unregister_capability_provider=unregister_provider;
  api.listen_local_json=listen;api.stop_local_json=stop;api.host_data_directory=host_data;api.register_plugin_ui=native_panel::register_ui;api.unregister_plugin_ui=native_panel::unregister_ui;api.update_plugin_ui=native_panel::update_ui;
- api.set_startup_network_guard=guard;api.get_startup_network_policy=policy;api.list_startup_network_guards=guards;api.acquire_profile_exclusive=acquire_profile;api.release_profile_exclusive=release_profile;api.get_profile_lease_state=lease_state;api.retire_host_web_renderers=retire_web;api.retire_host_web_contexts=retire_web;api.plugin_storage_write_scoped=storage_scoped;api.plugin_storage_read_scoped=storage_read;
- api.get_host_network_policy=network_policy;if(managed)api.capabilities|=LOADER_CAP_NETWORK_POLICY_SWITCH|LOADER_CAP_STARTUP_NETWORK_GUARD;
+ api.set_startup_network_guard=guard;api.get_startup_network_policy=policy;api.list_startup_network_guards=guards;api.acquire_profile_exclusive=acquire_profile;api.release_profile_exclusive=release_profile;api.get_profile_lease_state=lease_state;api.retire_host_web_renderers=retire_renderer;api.retire_host_web_contexts=retire_web;api.plugin_storage_write_scoped=storage_scoped;api.plugin_storage_read_scoped=storage_read;
+ api.get_host_network_policy=network_policy;api.register_host_navigation_handler=windows_host_navigation::add;api.unregister_host_navigation_handler=windows_host_navigation::remove;if(managed)api.capabilities|=LOADER_CAP_NETWORK_POLICY_SWITCH|LOADER_CAP_STARTUP_NETWORK_GUARD|LOADER_CAP_WEB_CONTEXT_RETIREMENT|LOADER_CAP_HOST_NAVIGATION;
  if(managed){editor_service=std::make_unique<editor_lua::Service>(&api);editor_gate_result=editor_gate::install(editor_service.get());if(editor_gate_result==LOADER_OK){auto entry=root/L"host-data"/L"Roaming"/L"Dreamtonics"/L"Synthesizer V Studio 2"/L"scripts"/L"opensv2-loader-runtime.lua";editor_start_result=editor_autostart::install(editor_service.get(),entry.c_str());}}
  native_panel::set_categories_changed(category_sync);native_panel::set_open_category(native_category_registry::open_category);native_category_registry::set_scripts_callbacks(native_panel::scripts_update,native_panel::scripts_remove);
  script_service=std::make_unique<script_runtime::Service>(&api);editor_gate::set_router(script_call);
