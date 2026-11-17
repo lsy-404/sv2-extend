@@ -17,7 +17,7 @@ if (api->struct_size >= offsetof(loader_api_v1, retire_host_web_contexts)
 
 在 Windows，主线程在阻断策略已应用、持有独占租约且代次匹配时，等待 WebView 环境和 controller 回调完成，关闭已观察的 controller，并核对受管 Job 中无其他子进程。未知进程、回调或未覆盖入口会拒绝完成；成功不替代网络状态验证。
 
-Windows 离线期间的 WebView 环境初始化请求会被受理并延后：Loader 保留回调和参数，不调用浏览器运行时，也不报告环境已创建。策略实际恢复在线后，主线程将请求交给原生 factory；已调用运行时的待决回调仍须完成才能确认回收。延后请求本身不创建子进程，不计入已调用运行时的待决回调。
+Windows 离线期间允许原生 WebView 环境初始化，并延后 controller 创建：Loader 保留真实环境、窗口和回调，不创建 controller。策略实际恢复在线后，主线程检查窗口有效性并向原生环境提交请求；无效窗口通过原回调报告失败。延后请求不计入已调用运行时的待决回调；实际待决回调仍须完成才能确认回收。
 
 以下为 macOS 的 WebKit 实现和验证范围。Core 弱引用观察 default、named、nonPersistent 以及可用的私有配置 factory，并观察配置赋值和实际 WebView 的 store。它不为追踪延长 ephemeral store 的 cookie 寿命。超过 256 个已观察 store 后拒绝回收确认。无法匹配的原生网络进程、缺少 SPI 或观察失败不会被解释为排空成功。
 

@@ -9,12 +9,11 @@
 #include <new>
 #include <deque>
 #include <memory>
-#include <string>
 #include "vendor/minhook/include/MinHook.h"
 namespace windows_webview_gate {
 using Factory=HRESULT(WINAPI*)(bool,int,PCWSTR,IUnknown*,IUnknown*);
 using Resolve=FARPROC(WINAPI*)(HMODULE,LPCSTR);
-struct State {bool installed=false,blocked=true,factoryBound=false,onlineFactorySeen=false;uint64_t denied=0;unsigned pendingEnvironment=0,pendingController=0,controllers=0;bool coverage=false;unsigned deferred=0;};
+struct State {bool installed=false,blocked=true,factoryBound=false,onlineFactorySeen=false;uint64_t denied=0;unsigned pendingEnvironment=0,pendingController=0,controllers=0;bool coverage=false;unsigned deferredController=0;};
 inline Resolve original_resolve=nullptr;
 inline std::atomic<Factory> original_factory{nullptr};
 inline std::atomic<HMODULE> retained{nullptr};
@@ -61,8 +60,7 @@ struct Proxy final: Completion {
   if(completed.exchange(true))return E_UNEXPECTED;
   if(claim&&claim->exchange(true)){if(environment)--pending_environment;else --pending_controller;return E_UNEXPECTED;}
   if(environment){
-   if(SUCCEEDED(result)&&object&&(GetCurrentThreadId()!=owner||!watch_environment(object)))coverage.store(false);
-   if(blocked.load()&&SUCCEEDED(result)){result=HRESULT_FROM_WIN32(ERROR_ACCESS_DENIED);object=nullptr;}
+   if(SUCCEEDED(result)&&object&&(GetCurrentThreadId()!=owner||!watch_environment(object))){coverage.store(false);if(blocked.load()){result=HRESULT_FROM_WIN32(ERROR_ACCESS_DENIED);object=nullptr;}}
   }else if(SUCCEEDED(result)&&object){
    if(blocked.load()){
     auto table=*reinterpret_cast<void***>(object);if(GetCurrentThreadId()!=owner||!table||!table[24]||FAILED(reinterpret_cast<ControllerClose>(table[24])(object)))coverage.store(false);
@@ -76,30 +74,30 @@ struct Proxy final: Completion {
   HRESULT forwarded=next->Invoke(result,object);if(environment)--pending_environment;else --pending_controller;return forwarded;
  }
 };
-inline HRESULT WINAPI create_controller(IUnknown *environment,HWND parent,Completion *handler){
- if(blocked.load()){++denied;return HRESULT_FROM_WIN32(ERROR_ACCESS_DENIED);}
+struct DeferredController {
+ IUnknown *environment;HWND parent;Completion *handler;
+ DeferredController(IUnknown *e,HWND p,Completion *h):environment(e),parent(p),handler(h){environment->AddRef();handler->AddRef();}
+ ~DeferredController(){environment->Release();handler->Release();}
+};
+inline std::deque<std::unique_ptr<DeferredController>> deferred;inline std::atomic<unsigned> deferred_count{0};inline bool flushing=false;
+inline HRESULT controller_impl(IUnknown *environment,HWND parent,Completion *handler,std::shared_ptr<std::atomic<bool>> claim={}){
+ if(blocked.load()){
+  if(GetCurrentThreadId()!=owner||!environment||!parent||!handler){++denied;return HRESULT_FROM_WIN32(ERROR_ACCESS_DENIED);}
+  if(deferred.size()>=128)return E_OUTOFMEMORY;
+  try{auto item=std::make_unique<DeferredController>(environment,parent,handler);deferred.push_back(std::move(item));++deferred_count;return S_OK;}catch(...){return E_OUTOFMEMORY;}
+ }
  if(GetCurrentThreadId()!=owner||!handler){coverage.store(false);return original_controller_create(environment,parent,handler);}
- Proxy *proxy=new(std::nothrow) Proxy(handler,false);if(!proxy){coverage.store(false);return E_OUTOFMEMORY;}
+ Proxy *proxy=new(std::nothrow) Proxy(handler,false,std::move(claim));if(!proxy){coverage.store(false);return E_OUTOFMEMORY;}
  HRESULT result=original_controller_create(environment,parent,proxy);proxy->Release();return result;
 }
-struct Deferred {
- bool check;int type;bool hasFolder;std::wstring folder;IUnknown *options,*handler;
- Deferred(bool c,int t,PCWSTR f,IUnknown *o,IUnknown *h):check(c),type(t),hasFolder(f!=nullptr),folder(f?f:L""),options(o),handler(h){if(options)options->AddRef();handler->AddRef();}
- ~Deferred(){if(options)options->Release();handler->Release();}
-};
-inline std::deque<std::unique_ptr<Deferred>> deferred;inline std::atomic<unsigned> deferred_count{0};inline bool flushing=false;
-inline HRESULT factory_impl(bool check,int type,PCWSTR folder,IUnknown *options,IUnknown *handler,std::shared_ptr<std::atomic<bool>> claim={}){
- if(blocked.load()){
-  if(GetCurrentThreadId()!=owner||!handler){++denied;return HRESULT_FROM_WIN32(ERROR_ACCESS_DENIED);}
-  if(deferred.size()>=128)return E_OUTOFMEMORY;
-  try{auto value=std::make_unique<Deferred>(check,type,folder,options,handler);deferred.push_back(std::move(value));++deferred_count;return S_OK;}catch(...){return E_OUTOFMEMORY;}
- }
- online_seen.store(true);auto original=original_factory.load();if(!original)return E_UNEXPECTED;
+inline HRESULT WINAPI create_controller(IUnknown *environment,HWND parent,Completion *handler){return controller_impl(environment,parent,handler);}
+inline HRESULT WINAPI factory(bool check,int type,PCWSTR folder,IUnknown *options,IUnknown *handler){
+ if(!handler)return E_INVALIDARG;
+ if(!blocked.load())online_seen.store(true);auto original=original_factory.load();if(!original)return E_UNEXPECTED;
  if(GetCurrentThreadId()!=owner||!handler){coverage.store(false);return original(check,type,folder,options,handler);}
- Proxy *proxy=new(std::nothrow) Proxy(reinterpret_cast<Completion*>(handler),true,std::move(claim));if(!proxy){coverage.store(false);return E_OUTOFMEMORY;}
+ Proxy *proxy=new(std::nothrow) Proxy(reinterpret_cast<Completion*>(handler),true);if(!proxy){coverage.store(false);return E_OUTOFMEMORY;}
  HRESULT result=original(check,type,folder,options,proxy);proxy->Release();return result;
 }
-inline HRESULT WINAPI factory(bool check,int type,PCWSTR folder,IUnknown *options,IUnknown *handler){return factory_impl(check,type,folder,options,handler);}
 inline bool runtime_module(HMODULE module){wchar_t path[32768];DWORD n=GetModuleFileNameW(module,path,32768);if(!n||n>=32768)return false;const wchar_t *name=path;for(DWORD i=0;i<n;i++)if(path[i]==L'\\'||path[i]==L'/')name=path+i+1;return _wcsicmp(name,L"EmbeddedBrowserWebView.dll")==0;}
 inline FARPROC WINAPI resolve(HMODULE module,LPCSTR name){
  FARPROC found=original_resolve(module,name);if(!found||reinterpret_cast<uintptr_t>(name)<=0xffff||strcmp(name,"CreateWebViewEnvironmentWithOptionsInternal"))return found;
@@ -119,9 +117,11 @@ inline void setblocked(bool value){
  blocked.store(value);if(value||GetCurrentThreadId()!=owner||flushing)return;
  flushing=true;while(!blocked.load()&&!deferred.empty()){
   auto item=std::move(deferred.front());deferred.pop_front();--deferred_count;
-  std::shared_ptr<std::atomic<bool>> claim;try{claim=std::make_shared<std::atomic<bool>>(false);}catch(...){reinterpret_cast<Completion*>(item->handler)->Invoke(E_OUTOFMEMORY,nullptr);continue;}
-  HRESULT result=factory_impl(item->check,item->type,item->hasFolder?item->folder.c_str():nullptr,item->options,item->handler,claim);
-  if(FAILED(result)&&!claim->exchange(true))reinterpret_cast<Completion*>(item->handler)->Invoke(result,nullptr);
+  DWORD pid=0;DWORD thread=GetWindowThreadProcessId(item->parent,&pid);
+  if(!IsWindow(item->parent)||thread!=owner||pid!=GetCurrentProcessId()){item->handler->Invoke(HRESULT_FROM_WIN32(ERROR_INVALID_WINDOW_HANDLE),nullptr);continue;}
+  std::shared_ptr<std::atomic<bool>> claim;try{claim=std::make_shared<std::atomic<bool>>(false);}catch(...){item->handler->Invoke(E_OUTOFMEMORY,nullptr);continue;}
+  HRESULT result=controller_impl(item->environment,item->parent,item->handler,claim);
+  if(FAILED(result)&&!claim->exchange(true))item->handler->Invoke(result,nullptr);
  }flushing=false;
 }
 inline bool retire(){
