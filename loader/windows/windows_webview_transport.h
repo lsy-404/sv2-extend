@@ -66,14 +66,14 @@ inline void relay(SOCKET client) {
 }
 inline bool install(){
  std::lock_guard<std::mutex> lock(mutex);if(current.installed)return true;
- if(!windows_socket_gate::current.installed||!windows_socket_gate::original_socket||!windows_socket_gate::original_accept||!windows_socket_gate::original_close)return false;
+ if(!windows_socket_gate::current.installed||!windows_socket_gate::original_socket_w||!windows_socket_gate::original_waccept||!windows_socket_gate::original_close)return false;
  WSADATA data{};if(WSAStartup(MAKEWORD(2,2),&data)!=0)return false;
- SOCKET s=windows_socket_gate::original_socket(AF_INET,SOCK_STREAM,IPPROTO_TCP);if(s==INVALID_SOCKET)return false;
+ SOCKET s=windows_socket_gate::original_socket_w(AF_INET,SOCK_STREAM,IPPROTO_TCP,nullptr,0,0);if(s==INVALID_SOCKET)return false;
  sockaddr_in address{};address.sin_family=AF_INET;address.sin_addr.s_addr=htonl(INADDR_LOOPBACK);
  if(bind(s,reinterpret_cast<sockaddr*>(&address),sizeof address)||listen(s,32)){windows_socket_gate::original_close(s);return false;}
  int length=sizeof address;if(getsockname(s,reinterpret_cast<sockaddr*>(&address),&length)){windows_socket_gate::original_close(s);return false;}
  listener=s;port=ntohs(address.sin_port);current.installed=true;
- try {std::thread([]{for(;;){SOCKET client=windows_socket_gate::original_accept(listener,nullptr,nullptr);if(client==INVALID_SOCKET){std::lock_guard<std::mutex> lock(mutex);current.error=true;return;}
+ try {std::thread([]{for(;;){SOCKET client=windows_socket_gate::original_waccept(listener,nullptr,nullptr,nullptr,0);if(client==INVALID_SOCKET){std::lock_guard<std::mutex> lock(mutex);current.error=true;return;}
   {std::lock_guard<std::mutex> lock(mutex);if(current.blocked){windows_socket_gate::original_close(client);continue;}try{clients.insert(client);++current.active;}catch(...){current.error=true;windows_socket_gate::original_close(client);continue;}}
   try{std::thread(relay,client).detach();}catch(...){std::lock_guard<std::mutex> lock(mutex);clients.erase(client);--current.active;current.error=true;windows_socket_gate::original_close(client);changed.notify_all();}
  }}).detach();}catch(...){windows_socket_gate::original_close(s);listener=INVALID_SOCKET;current.installed=false;current.error=true;return false;}return true;
