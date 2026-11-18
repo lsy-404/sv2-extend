@@ -13,7 +13,7 @@
 #include "../packages/package_model.h"
 #include "../packages/package_runtime.h"
 #include "package_network.h"
-#include "package_crypto.h"
+#include "../packages/package_crypto.h"
 #include "../../sdk/include/loader_api.h"
 #include "../../sdk/include/extend_platform.h"
 #include "native_panel.h"
@@ -98,7 +98,7 @@ int register_provider(const char *id,loader_editor_dispatch dispatch,void *owner
  providers.emplace(id,std::move(candidate));++capability_generation;return LOADER_OK;
 }
 int unregister_provider(const char *id,void *owner){if(!on_main()||!id)return LOADER_ERR_INVALID;auto found=providers.find(id);if(found==providers.end()||found->second.owner!=owner)return LOADER_ERR_INVALID;providers.erase(found);++capability_generation;std::vector<Request*> pending;{std::lock_guard<std::mutex> guard(requests_mutex);for(auto &r:requests)if(r->provider==id&&!r->delivered)pending.push_back(r.get());}for(auto r:pending)error(r,"PROVIDER_REMOVED");return 0;}
-json capability_snapshot(){json methods=json::array(),tools=json::array();for(auto &entry:providers){for(auto &method:entry.second.methods)methods.push_back(method);if(entry.second.descriptor.contains("tools"))for(auto &tool:entry.second.descriptor["tools"])tools.push_back(tool);}json list=json::array();for(auto &entry:packages){auto &package=*entry.second;json grants=json::object();for(const auto &key:package_model::grantable(package.manifest,environment))grants[key]=package.grants.value("grant."+key,false);list.push_back({{"id",entry.first},{"name",package.manifest.name},{"version",package.manifest.version},{"kind",package.manifest.native?"native":"declarative"},{"state",package.state},{"reason",package.reason},{"permissions",grants}});}return {{"methods",methods},{"tools",tools},{"capabilityGeneration",capability_generation},{"loader",package_model::describe(environment)},{"packages",list}};}
+json capability_snapshot(){json methods=json::array(),tools=json::array();for(auto &entry:providers){for(auto &method:entry.second.methods)methods.push_back(method);if(entry.second.descriptor.contains("tools"))for(auto &tool:entry.second.descriptor["tools"])tools.push_back(tool);}json list=json::array();for(auto &entry:packages){auto &package=*entry.second;json grants=json::object();for(const auto &key:package_model::grantable(package.manifest,environment))grants[key]=package.grants.value("grant."+key,false);list.push_back({{"id",entry.first},{"name",package.manifest.name},{"version",package.manifest.version},{"kind",package.manifest.native?"native":"declarative"},{"state",package.state},{"reason",package.reason},{"update",package.manifest.update_url},{"permissions",grants}});}return {{"methods",methods},{"tools",tools},{"capabilityGeneration",capability_generation},{"loader",package_model::describe(environment)},{"packages",list}};}
 json script_call(const std::string &method,const json &args,bool javascript){
  if(!on_main())return editor_lua::Service::fail("MAIN_THREAD_REQUIRED");if(!args.is_object())return editor_lua::Service::fail("INVALID_ARGUMENT");
  if(const char *denied=script_settings::denial(javascript?js_runtime:lua_runtime,method,args))return editor_lua::Service::fail(denied);
@@ -244,7 +244,9 @@ void execute(Package &package,const package_model::Call &call,const json &argume
  if(call.method=="storage.read"||call.method=="storage.write"){if(!package.manifest.capabilities.count("storage"))fail({{"code","PERMISSION_UNDECLARED"},{"package",package.manifest.id},{"method",call.method}});else finish(storage_call(package,call.method,merged));return;}
  std::string key;if(auto code=permission_key(package,call.method,key)){fail({{"code",code},{"package",package.manifest.id},{"method",call.method}});return;}
  if(!package.grants.value("grant."+key,false)){fail({{"code","PERMISSION_DENIED"},{"package",package.manifest.id},{"permission",key}});return;}
- if(call.method=="http.request"){
+ if(call.method=="http.request"||call.method=="update.fetch"){
+  // update.fetch is a GET/POST pinned to the package's own declared update endpoint; the package verifies and applies the result itself.
+  if(call.method=="update.fetch"){if(package.manifest.update_url.empty()){fail({{"code","NO_UPDATE_URL"},{"package",package.manifest.id}});return;}merged["url"]=package.manifest.update_url;}
   package_network::request(merged,[complete,context](const json &response){auto body=std::make_shared<std::string>(response.dump(-1,' ',false,json::error_handler_t::replace));if(!post_main([complete,context,body]{complete(body->data(),body->size(),context);})){static const char lost[]="{\"ok\":false,\"error\":{\"code\":\"DISPATCH_UNAVAILABLE\"}}";complete(lost,sizeof lost-1,context);}});return;
  }
  if(call.method=="server.listen"){finish(listen_call(package,merged));return;}
@@ -306,7 +308,7 @@ std::string start_runtime(Package &package){
   };
   host.decrypt=[](const std::string &algorithm,const std::string &key,const std::string &iv,const std::string &data,const std::string &tag,const std::string &aad,std::string &out,std::string &error){return package_crypto::decrypt(algorithm,key,iv,data,tag,aad,out,error);};
  }
- std::string error;package.runtime=package_runtime::Runtime::create(std::move(host),package.manifest.id,package.manifest.version,source,error);
+ std::string error;package.runtime=package_runtime::Runtime::create(std::move(host),package.manifest.id,package.manifest.version,package.manifest.update_url,source,error);
  if(!package.runtime){for(auto &character:error)if(character<32||character>126)character=' ';package.last=error.substr(0,400);log_message(("package "+package.manifest.id+": "+error).c_str());return "runtime-load";}
  for(const auto &name:package.manifest.methods)if(!package.runtime->handles(name))return "runtime-handler:"+name;
  for(const auto &tool:package.manifest.tools)if(!tool.call.handler.empty()&&!package.runtime->handles(tool.call.handler))return "runtime-handler:"+tool.call.handler;
@@ -407,7 +409,7 @@ json package_receipt(const Package &package){
 void write_package_results(const json &rejected){package_results=rejected;for(auto &entry:packages)package_results.push_back(package_receipt(*entry.second));}
 bool flag_enabled(const wchar_t *key);
 void load_packages(){
- environment.capabilities={"mcp.tools","panel","storage","runtime.lua","runtime.protected","http","http.server"};
+ environment.capabilities={"mcp.tools","panel","storage","runtime.lua","runtime.protected","http","http.server","update"};
  if(flag_enabled(L"OPEN_SV2_CLEAN_PROFILE_SUPPORTED"))environment.capabilities.insert("profile.clean");
  if(managed&&editor_gate_result==LOADER_OK)environment.capabilities.insert({"editor.read","editor.write","transport.read","transport.control"});
  if(native_voice&&native_voice->installed)environment.capabilities.insert({"voicebanks.read","voicebanks.select"});

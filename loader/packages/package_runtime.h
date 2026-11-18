@@ -46,14 +46,14 @@ inline bool base64_decode(const std::string &input,std::string &out){
 class Runtime:public std::enable_shared_from_this<Runtime>{
 public:
  // Runs the main chunk with `extend` as its argument; it returns the handler table.
- static std::shared_ptr<Runtime> create(Host host,const std::string &id,const std::string &version,const std::string &source,std::string &error){
+ static std::shared_ptr<Runtime> create(Host host,const std::string &id,const std::string &version,const std::string &update,const std::string &source,std::string &error){
   std::shared_ptr<Runtime> runtime(new Runtime(std::move(host)));
   if(source.size()>source_limit){error="main chunk too large";return nullptr;}
   auto L=runtime->state=lua_newstate(allocate,runtime.get(),static_cast<unsigned>(reinterpret_cast<uintptr_t>(runtime.get())>>4));
   if(!L){error="out of memory";return nullptr;}
-  *static_cast<Runtime**>(lua_getextraspace(L))=runtime.get();lua_pushlightuserdata(L,const_cast<std::string*>(&id));lua_pushlightuserdata(L,const_cast<std::string*>(&version));lua_pushlightuserdata(L,const_cast<std::string*>(&source));
-  lua_pushcfunction(L,prepare);lua_insert(L,-4);
-  if(runtime->call(3,0)!=LUA_OK){error=runtime->message();return nullptr;}
+  *static_cast<Runtime**>(lua_getextraspace(L))=runtime.get();lua_pushlightuserdata(L,const_cast<std::string*>(&id));lua_pushlightuserdata(L,const_cast<std::string*>(&version));lua_pushlightuserdata(L,const_cast<std::string*>(&update));lua_pushlightuserdata(L,const_cast<std::string*>(&source));
+  lua_pushcfunction(L,prepare);lua_insert(L,-5);
+  if(runtime->call(4,0)!=LUA_OK){error=runtime->message();return nullptr;}
   return runtime;
  }
  ~Runtime(){
@@ -193,7 +193,7 @@ private:
   lua_pushvalue(L,lua_upvalueindex(1));lua_call(L,1,1);return 1;
  }
  static int prepare(lua_State *L){
-  auto runtime=self(L);auto id=static_cast<const std::string*>(lua_touserdata(L,1));auto version=static_cast<const std::string*>(lua_touserdata(L,2));auto source=static_cast<const std::string*>(lua_touserdata(L,3));
+  auto runtime=self(L);auto id=static_cast<const std::string*>(lua_touserdata(L,1));auto version=static_cast<const std::string*>(lua_touserdata(L,2));auto update=static_cast<const std::string*>(lua_touserdata(L,3));auto source=static_cast<const std::string*>(lua_touserdata(L,4));
   const luaL_Reg libraries[]={{LUA_GNAME,luaopen_base},{LUA_COLIBNAME,luaopen_coroutine},{LUA_TABLIBNAME,luaopen_table},{LUA_STRLIBNAME,luaopen_string},{LUA_MATHLIBNAME,luaopen_math},{LUA_UTF8LIBNAME,luaopen_utf8}};
   for(const auto &library:libraries){luaL_requiref(L,library.name,library.func,1);lua_pop(L,1);}
   for(auto name:{"dofile","loadfile","load","collectgarbage"}){lua_pushnil(L);lua_setglobal(L,name);}
@@ -204,7 +204,7 @@ private:
   lua_pushcfunction(L,encode);lua_setfield(L,-2,"b64encode");lua_pushcfunction(L,decode);lua_setfield(L,-2,"b64decode");
   // Sealed-logic primitives appear only for a package that declared runtime.protected.
   if(runtime->host.decrypt){lua_pushcfunction(L,resource);lua_setfield(L,-2,"resource");lua_pushcfunction(L,decrypt);lua_setfield(L,-2,"decrypt");lua_pushvalue(L,-1);lua_pushcclosure(L,load_module,1);lua_setfield(L,-2,"load");}
-  lua_createtable(L,0,2);lua_pushlstring(L,id->data(),id->size());lua_setfield(L,-2,"id");lua_pushlstring(L,version->data(),version->size());lua_setfield(L,-2,"version");lua_setfield(L,-2,"package");
+  lua_createtable(L,0,3);lua_pushlstring(L,id->data(),id->size());lua_setfield(L,-2,"id");lua_pushlstring(L,version->data(),version->size());lua_setfield(L,-2,"version");if(!update->empty()){lua_pushlstring(L,update->data(),update->size());lua_setfield(L,-2,"update");}lua_setfield(L,-2,"package");
   lua_call(L,1,1);if(!lua_istable(L,-1))return luaL_error(L,"the main chunk must return a table of handlers");
   runtime->module=luaL_ref(L,LUA_REGISTRYINDEX);return 0;
  }

@@ -5,7 +5,7 @@
 #include <string>
 #include <cstring>
 #include "vendor/json.hpp"
-#include "package_crypto.h"
+#include "../packages/package_crypto.h"
 #include "../../sdk/include/loader_api.h"
 using json=nlohmann::json;
 static std::string base64(const std::string &input){
@@ -63,8 +63,8 @@ int wmain(int argc,wchar_t **argv){
  std::string plain="local extend=...\nreturn function(input) return { value=(input or 0)*7, proof=\"sealed\" } end\n",cipher,tag,sealError;
  bool sealed=package_crypto::encrypt("aes-256-gcm",key,iv,plain,"",cipher,tag,sealError);
  auto folder=plugins/"example.sealed";std::filesystem::create_directories(folder);
- std::ofstream(folder/"plugin.json")<<R"({"schema":1,"id":"example.sealed","name":"Sealed","version":"1.0.0","requires":{"capabilities":{"runtime.lua":"*","runtime.protected":"*"}},"main":"main.lua","contributes":{"methods":["open"]}})";
- std::ofstream(folder/"main.lua")<<"local extend=...\nlocal handlers={}\nfunction handlers.open(request,reply)\n local ok,result=pcall(function()\n  local blob=extend.resource(\"secret.bin\")\n  local source=extend.decrypt{algorithm=\"aes-256-gcm\",key=extend.b64decode(request.key),iv=extend.b64decode(request.iv),tag=extend.b64decode(request.tag),data=blob}\n  return extend.load(source,\"secret\")(request.input)\n end)\n if ok then reply(result) else reply(nil,{code=\"SEALED_FAILED\",message=tostring(result)}) end\nend\nreturn handlers\n";
+ std::ofstream(folder/"plugin.json")<<R"({"schema":1,"id":"example.sealed","name":"Sealed","version":"1.0.0","requires":{"capabilities":{"runtime.lua":"*","runtime.protected":"*"}},"permissions":["update"],"update":{"url":"https://updates.example.com/sealed/latest.json"},"main":"main.lua","contributes":{"methods":["open","info","check"]}})";
+ std::ofstream(folder/"main.lua")<<"local extend=...\nlocal handlers={}\nfunction handlers.open(request,reply)\n local ok,result=pcall(function()\n  local blob=extend.resource(\"secret.bin\")\n  local source=extend.decrypt{algorithm=\"aes-256-gcm\",key=extend.b64decode(request.key),iv=extend.b64decode(request.iv),tag=extend.b64decode(request.tag),data=blob}\n  return extend.load(source,\"secret\")(request.input)\n end)\n if ok then reply(result) else reply(nil,{code=\"SEALED_FAILED\",message=tostring(result)}) end\nend\nfunction handlers.info(_,reply) reply({update=extend.package.update}) end\nfunction handlers.check(_,reply) extend.request(\"update.fetch\",{},function(result,err) if err then reply(nil,err) else reply(result) end end) end\nreturn handlers\n";
  std::ofstream(folder/"secret.bin",std::ios::binary).write(cipher.data(),(std::streamsize)cipher.size());
  bool reloaded=sealed&&call("runtime.packages.reload","{}").value("ok",false)&&package("example.sealed")["state"]=="active";
  json good{{"key",base64(key)},{"iv",base64(iv)},{"tag",base64(tag)},{"input",6}};
@@ -72,6 +72,9 @@ int wmain(int argc,wchar_t **argv){
  checks["sealedLogicDecryptsAndRuns"]=reloaded&&opened.value("ok",false)&&opened["result"]["value"]==42&&opened["result"]["proof"]=="sealed";
  std::string tampered=tag;tampered[0]^=0x40;json bad{{"key",base64(key)},{"iv",base64(iv)},{"tag",base64(tampered)},{"input",6}};
  checks["sealedLogicRejectsTampering"]=reloaded&&call("example.sealed.open",bad.dump().c_str())["error"]["code"]=="SEALED_FAILED";
+ const std::string updateUrl="https://updates.example.com/sealed/latest.json";
+ checks["packageDeclaresUpdateUrl"]=reloaded&&package("example.sealed")["update"]==updateUrl&&call("example.sealed.info","{}")["result"]["update"]==updateUrl;
+ checks["ungrantedUpdateFetchDenied"]=reloaded&&wait("example.sealed.check",json::object())["error"]["code"]=="PERMISSION_DENIED";
  bool passed=true;for(auto &value:checks)passed=passed&&value.get<bool>();
  std::ofstream report{std::filesystem::path(argv[1])};report<<json{{"passed",passed},{"checks",checks},{"hostPid",GetCurrentProcessId()},{"scope","Real Windows bootstrap and resident shared SDK fixture; not a Windows SV2 acceptance test."}}.dump(2);report.close();
  ULONGLONG deadline=GetTickCount64()+2000;while(GetTickCount64()<deadline){MSG message;while(PeekMessageW(&message,nullptr,0,0,PM_REMOVE)){TranslateMessage(&message);DispatchMessageW(&message);}Sleep(10);}return passed?0:3;

@@ -46,6 +46,7 @@
 | `requires.packages` | 依赖的其他扩展包及版本范围，依赖先于本包启用。 |
 | `permissions` | 需要用户开启的权限：可授权能力的标识，或 `package.<id>`（调用所依赖的包提供的方法）。 |
 | `main` | 包代码入口，包内相对路径的 `.lua` 文件；需要能力 `runtime.lua`。 |
+| `update.url` | 包自己声明的更新端点（必须 HTTPS）。加载器把 `update.fetch` 锁定到此地址，并在包状态和 `extend.package.update` 中公开它。 |
 | `contributes.methods` | 向依赖本包的其他包公开的处理函数名，方法名为 `<包 id>.<函数名>`；需要 `main`。 |
 | `contributes.mcpTools` | MCP 工具，名称以 `svext_` 开头；需要能力 `mcp.tools`。 |
 | `contributes.panel.menu` | 在 Extend 中注册的面板菜单：动作，或带标题的一组动作，最多 24 行；需要能力 `panel`。 |
@@ -74,6 +75,7 @@
 | `exports.write` | 是 | `exports.start`、`exports.cancel` |
 | `http` | 是 | `http.request`：发起 HTTPS 请求 |
 | `http.server` | 是 | `server.listen`、`server.close`：在本机回环地址提供 HTTP 服务 |
+| `update` | 是 | `update.fetch`：向清单 `update.url` 声明的端点发起请求（地址由加载器锁定）|
 
 Windows 的 `ExtendLauncher --host-clean <official-synthv-studio.exe> <profile-directory>` 使用新建或只包含插件目录的 profile，准备官方运行资源并启动受管宿主。它不会迁移当前用户数据，已初始化的 profile 会被拒绝。支持该入口的启动器与 Core 组合会声明 `profile.clean`。
 
@@ -150,6 +152,14 @@ return handlers
 
 密钥、IV、认证标签与密文如何分发与保管由包自己决定；加载器只提供“核验后在内存解密并加载”这一机制，不保存密钥，也不限制逻辑如何取得密钥。被解密出的处理函数由本包的已声明处理函数内部调用，不能登记为 `contributes.methods` / 菜单 / MCP 工具（这些在加载时就要求处理函数已存在）。
 
+加载器提供的 AES-GCM 只是便利项。包也可以自带加密实现：用纯 Lua 自行解密，或在自己的服务端解密后把明文取回，再交给 `extend.load`。`extend.resource` 与 `extend.load` 不要求使用 `extend.decrypt`。
+
+## 更新
+
+包可以在清单里声明 `update.url`（HTTPS），作为自己的更新端点。加载器不代替包决定何时更新或如何校验，只做两件事：把该地址在包状态（`runtime.capabilities` 的 `update` 字段）和 `extend.package.update` 中公开；在用户开启 `update` 权限后，`update.fetch` 向这个被锁定的地址发起请求（复用出站请求的 HTTPS 与大小校验，包不能改写目标主机）。
+
+按需更新由包自己驱动：在需要时 `extend.request("update.fetch", {headers=...}, callback)` 取回更新描述（可带鉴权头），用自己的方式校验签名、解密负载，然后把新逻辑直接 `extend.load` 到内存（无需落盘），或写入自己的 `storage` 缓存。更新新增的能力仍受权限约束——即便包改写自己的清单要求更多能力，这些能力默认关闭，仍需用户逐项开启。
+
 ## 网络
 
 ### 出站请求
@@ -212,7 +222,7 @@ end
 
 | 平台 | 状态 |
 | --- | --- |
-| Windows x64 | 已实现；独立 fixture 宿主验证了依赖解析、授权与拒绝、存储读写、缺少能力时不加载、运行时卸载与恢复、包代码处理调用、依赖包代码被调用、失控代码被终止、运行时隔离，包读取自带密文、在内存解密并加载执行且篡改密文被拒绝，以及包开启本机 HTTP 服务并经出站请求访问它、令牌校验和非回环 `http://` 被拒绝。HTTPS 与证书校验用独立程序对公网站点验证过。尚未在 SV2 宿主中验证，包括离线策略对包请求的影响。 |
-| macOS | 尚未实现；无原生库的包会被跳过。 |
+| Windows x64 | 已实现；独立 fixture 宿主验证了依赖解析、授权与拒绝、存储读写、缺少能力时不加载、运行时卸载与恢复、包代码处理调用、依赖包代码被调用、失控代码被终止、运行时隔离，包读取自带密文、在内存解密并加载执行且篡改密文被拒绝，更新端点声明的公开与 `update.fetch` 的权限锁定，以及包开启本机 HTTP 服务并经出站请求访问它、令牌校验和非回环 `http://` 被拒绝。HTTPS 与证书校验用独立程序对公网站点验证过。尚未在 SV2 宿主中验证，包括离线策略对包请求的影响。 |
+| macOS | 声明式运行时尚未移植：当前 macOS 加载器只处理带原生库的包，无原生库的包会被跳过。平台无关部分（`package_model.h`、`package_runtime.h`、`package_crypto.h`）已就绪，其中 AES-GCM 原语已含 CommonCrypto 后端；仍需把清单解析、Lua 运行时、能力与网络接入 macOS 加载器，密封逻辑与更新随之生效。该移植需在 macOS 工具链上构建验证。 |
 
 包代码目前只有 Lua 运行时。向宿主用户脚本（官方 Lua/JS）提供模块尚未实现。
