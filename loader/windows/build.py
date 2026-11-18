@@ -24,7 +24,7 @@ run('g++',*flags,'-shared',source/'core.cpp',source/'editor_gate.cpp',source/'ed
 run('windres','-I',source,'-i',source/'launcher.rc','-o',out/'launcher-resource.o')
 run('g++',*flags,'-municode',source/'launcher.cpp',out/'launcher-resource.o','-o',out/'ExtendLauncher.exe','-ladvapi32','-lshell32','-lole32','-loleaut32','-luuid','-lbcrypt','-Wl,--dynamicbase,--nxcompat')
 run('g++',*flags,'-municode',source/'network_helper.cpp','-o',out/'network-helper.exe','-lshell32','-lole32','-loleaut32','-luuid','-Wl,--dynamicbase,--nxcompat')
-run('g++',*flags,'-municode',source/'fixture.cpp','-o',out/'ExtendFixture.exe','-luser32','-Wl,--dynamicbase,--nxcompat')
+run('g++',*flags,'-municode',source/'fixture.cpp','-o',out/'ExtendFixture.exe','-luser32','-lbcrypt','-Wl,--dynamicbase,--nxcompat')
 (out/'namespace-host').mkdir(exist_ok=True)
 run('g++',*flags,'-municode',source.parents[1]/'test/windows_namespace_fixture.cpp','-o',out/'namespace-host/NamespaceFixture.exe','-lshell32','-lole32','-luuid','-luser32','-Wl,--dynamicbase,--nxcompat')
 plugin=out/'smoke-profile/plugins/example.hello/native/windows-x86_64/plugin.dll';plugin.parent.mkdir(parents=True,exist_ok=True)

@@ -13,6 +13,7 @@
 #include "../packages/package_model.h"
 #include "../packages/package_runtime.h"
 #include "package_network.h"
+#include "package_crypto.h"
 #include "../../sdk/include/loader_api.h"
 #include "../../sdk/include/extend_platform.h"
 #include "native_panel.h"
@@ -280,7 +281,7 @@ json package_state(const Package &package){
 }
 bool regular(const fs::path &path,bool directory);
 bool path_inside(const fs::path &package,const std::string &relative,const wchar_t *extension,fs::path &absolute){
- if(relative.empty()||relative.size()>512||relative.find(':')!=std::string::npos)return false;fs::path path=fs::u8path(relative);if(path.is_absolute()||path.extension()!=extension)return false;
+ if(relative.empty()||relative.size()>512||relative.find(':')!=std::string::npos)return false;fs::path path=fs::u8path(relative);if(path.is_absolute()||(extension&&path.extension()!=extension))return false;
  auto cursor=package;for(const auto &part:path){if(part==L".."||part==L".")return false;cursor/=part;if(!regular(cursor,cursor!=package/path))return false;}
  absolute=(package/path).lexically_normal();auto rel=absolute.lexically_relative(package.lexically_normal());return !rel.empty()&&*rel.begin()!=L"..";
 }
@@ -296,6 +297,15 @@ std::string start_runtime(Package &package){
  auto target=&package;package_runtime::Host host;
  host.request=[target](const std::string &method,const json &arguments,package_runtime::Done done){package_model::Call call;call.method=method;execute(*target,call,arguments,runtime_reply,new package_runtime::Done(std::move(done)));};
  host.log=[target](const std::string &text){log_message(("package "+target->manifest.id+": "+text).c_str());};
+ if(package.manifest.capabilities.count("runtime.protected")){
+  host.resource=[target](const std::string &name,std::string &data,std::string &error)->bool{
+   fs::path file;if(!path_inside(target->folder,name,nullptr,file)){error="NOT_FOUND";return false;}
+   std::error_code code;auto size=fs::file_size(file,code);if(code||size>package_crypto::payload_limit){error="TOO_LARGE";return false;}
+   std::ifstream stream(file,std::ios::binary);std::string bytes((std::istreambuf_iterator<char>(stream)),std::istreambuf_iterator<char>());if(!stream&&!stream.eof()){error="IO";return false;}
+   data=std::move(bytes);return true;
+  };
+  host.decrypt=[](const std::string &algorithm,const std::string &key,const std::string &iv,const std::string &data,const std::string &tag,const std::string &aad,std::string &out,std::string &error){return package_crypto::decrypt(algorithm,key,iv,data,tag,aad,out,error);};
+ }
  std::string error;package.runtime=package_runtime::Runtime::create(std::move(host),package.manifest.id,package.manifest.version,source,error);
  if(!package.runtime){for(auto &character:error)if(character<32||character>126)character=' ';package.last=error.substr(0,400);log_message(("package "+package.manifest.id+": "+error).c_str());return "runtime-load";}
  for(const auto &name:package.manifest.methods)if(!package.runtime->handles(name))return "runtime-handler:"+name;
@@ -397,7 +407,7 @@ json package_receipt(const Package &package){
 void write_package_results(const json &rejected){package_results=rejected;for(auto &entry:packages)package_results.push_back(package_receipt(*entry.second));}
 bool flag_enabled(const wchar_t *key);
 void load_packages(){
- environment.capabilities={"mcp.tools","panel","storage","runtime.lua","http","http.server"};
+ environment.capabilities={"mcp.tools","panel","storage","runtime.lua","runtime.protected","http","http.server"};
  if(flag_enabled(L"OPEN_SV2_CLEAN_PROFILE_SUPPORTED"))environment.capabilities.insert("profile.clean");
  if(managed&&editor_gate_result==LOADER_OK)environment.capabilities.insert({"editor.read","editor.write","transport.read","transport.control"});
  if(native_voice&&native_voice->installed)environment.capabilities.insert({"voicebanks.read","voicebanks.select"});

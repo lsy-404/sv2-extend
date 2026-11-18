@@ -5,8 +5,15 @@
 #include <string>
 #include <cstring>
 #include "vendor/json.hpp"
+#include "package_crypto.h"
 #include "../../sdk/include/loader_api.h"
 using json=nlohmann::json;
+static std::string base64(const std::string &input){
+ static const char *table="ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";std::string out;size_t index=0;
+ while(index+3<=input.size()){unsigned long v=(unsigned char)input[index]<<16|(unsigned char)input[index+1]<<8|(unsigned char)input[index+2];out+=table[v>>18&63];out+=table[v>>12&63];out+=table[v>>6&63];out+=table[v&63];index+=3;}
+ if(size_t left=input.size()-index){unsigned long v=(unsigned char)input[index]<<16|(left==2?(unsigned char)input[index+1]<<8:0);out+=table[v>>18&63];out+=table[v>>12&63];out+=left==2?table[v>>6&63]:'=';out+='=';}
+ return out;
+}
 static json response;
 static void complete(const char *body,size_t length,void*){response=json::parse(body,body+length);}
 int wmain(int argc,wchar_t **argv){
@@ -52,6 +59,19 @@ int wmain(int argc,wchar_t **argv){
  checks["removedPackageUnloads"]=!moved&&call("runtime.packages.reload","{}").value("ok",false)&&package("example.locked")["state"]=="removed"&&call("example.locked.svext_locked_greet","{}")["error"]["code"]=="METHOD_UNAVAILABLE"&&package("example.greeter")["state"]=="active";
  std::filesystem::rename(plugins.parent_path()/"example.locked.parked",plugins/"example.locked",moved);
  checks["restoredPackageLoads"]=!moved&&call("runtime.packages.reload","{}").value("ok",false)&&package("example.locked")["state"]=="active"&&call("example.locked.svext_locked_greet","{}")["error"]["code"]=="PERMISSION_DENIED";
+ std::string key(32,'\0'),iv(12,'\0');BCryptGenRandom(nullptr,(PUCHAR)&key[0],32,BCRYPT_USE_SYSTEM_PREFERRED_RNG);BCryptGenRandom(nullptr,(PUCHAR)&iv[0],12,BCRYPT_USE_SYSTEM_PREFERRED_RNG);
+ std::string plain="local extend=...\nreturn function(input) return { value=(input or 0)*7, proof=\"sealed\" } end\n",cipher,tag,sealError;
+ bool sealed=package_crypto::encrypt("aes-256-gcm",key,iv,plain,"",cipher,tag,sealError);
+ auto folder=plugins/"example.sealed";std::filesystem::create_directories(folder);
+ std::ofstream(folder/"plugin.json")<<R"({"schema":1,"id":"example.sealed","name":"Sealed","version":"1.0.0","requires":{"capabilities":{"runtime.lua":"*","runtime.protected":"*"}},"main":"main.lua","contributes":{"methods":["open"]}})";
+ std::ofstream(folder/"main.lua")<<"local extend=...\nlocal handlers={}\nfunction handlers.open(request,reply)\n local ok,result=pcall(function()\n  local blob=extend.resource(\"secret.bin\")\n  local source=extend.decrypt{algorithm=\"aes-256-gcm\",key=extend.b64decode(request.key),iv=extend.b64decode(request.iv),tag=extend.b64decode(request.tag),data=blob}\n  return extend.load(source,\"secret\")(request.input)\n end)\n if ok then reply(result) else reply(nil,{code=\"SEALED_FAILED\",message=tostring(result)}) end\nend\nreturn handlers\n";
+ std::ofstream(folder/"secret.bin",std::ios::binary).write(cipher.data(),(std::streamsize)cipher.size());
+ bool reloaded=sealed&&call("runtime.packages.reload","{}").value("ok",false)&&package("example.sealed")["state"]=="active";
+ json good{{"key",base64(key)},{"iv",base64(iv)},{"tag",base64(tag)},{"input",6}};
+ auto opened=call("example.sealed.open",good.dump().c_str());
+ checks["sealedLogicDecryptsAndRuns"]=reloaded&&opened.value("ok",false)&&opened["result"]["value"]==42&&opened["result"]["proof"]=="sealed";
+ std::string tampered=tag;tampered[0]^=0x40;json bad{{"key",base64(key)},{"iv",base64(iv)},{"tag",base64(tampered)},{"input",6}};
+ checks["sealedLogicRejectsTampering"]=reloaded&&call("example.sealed.open",bad.dump().c_str())["error"]["code"]=="SEALED_FAILED";
  bool passed=true;for(auto &value:checks)passed=passed&&value.get<bool>();
  std::ofstream report{std::filesystem::path(argv[1])};report<<json{{"passed",passed},{"checks",checks},{"hostPid",GetCurrentProcessId()},{"scope","Real Windows bootstrap and resident shared SDK fixture; not a Windows SV2 acceptance test."}}.dump(2);report.close();
  ULONGLONG deadline=GetTickCount64()+2000;while(GetTickCount64()<deadline){MSG message;while(PeekMessageW(&message,nullptr,0,0,PM_REMOVE)){TranslateMessage(&message);DispatchMessageW(&message);}Sleep(10);}return passed?0:3;

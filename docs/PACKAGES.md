@@ -63,6 +63,7 @@
 | `storage` | 否 | `storage.read`、`storage.write`：读写包自己的数据 |
 | `profile.clean` | 否 | Windows 启动器提供干净 profile 启动；没有可调用方法 |
 | `runtime.lua` | 否 | 在隔离的 Lua 5.5 运行时中执行包代码 |
+| `runtime.protected` | 否 | 读取包自带的密文、在内存中解密并加载为可执行逻辑 |
 | `editor.read` | 是 | `selection.read`、`pitch.read_range` |
 | `editor.write` | 是 | `notes.set_pitch`、`notes.add`、`notes.remove`、`groups.create`、`groups.remove`、`pitch.replace_range` |
 | `transport.read` | 是 | `transport.status` |
@@ -104,12 +105,50 @@ return handlers
 - 处理函数收到 `(arguments, reply)`；`reply(result)` 或 `reply(nil, error)` 结束一次调用，可以在异步回调中调用。
 - `extend.request(method, arguments, callback)` 是代码访问外部的唯一途径，回调收到 `(result, error)`；它与声明式调用经过同一套能力和权限检查。
 - `extend.log(...)` 与 `print` 写入加载器日志；`extend.package` 提供 `id` 和 `version`。
+- `extend.b64encode(bytes)` / `extend.b64decode(string)` 在原始字节与标准 Base64 之间转换，便于处理端点返回的密钥、IV 等。
 - 可用的库只有 base、coroutine、table、string、math、utf8。`os`、`io`、`debug`、`package`、`require`、`load`、`dofile`、`loadfile`、`collectgarbage`、`string.dump` 不存在，也不能访问宿主的 `SV` 对象；只加载文本源码，上限 256 KiB。
 - 每个状态内存上限 16 MiB；每次进入代码的指令预算为两千万条，超出后调用以 `HANDLER_FAILED` 结束，状态可继续使用。单次 C 库调用（如病态的模式匹配）内部不计入预算。
 - 表的键恰为 1..n 时转换为 JSON 数组，否则键必须全部是字符串；空表转换为对象。
 - 入口加载失败，或清单引用的处理函数不存在，包不会启用。
 
 依赖的包先于本包启动；依赖关系不允许成环，因此对依赖包的调用不会回到调用方。
+
+## 加密逻辑
+
+部分实现逻辑可以密文形式随包分发，由包在运行时自行核验访问权限（例如向自己的授权端点取回密钥）后，在内存中解密并加载。明文不落盘，由包代码决定何时解密、何时加载。
+
+声明 `runtime.protected` 后，`extend` 多出三个方法：
+
+- `extend.resource(name)`：读取包目录内的一个自带文件（如密文 `secret.bin`）为原始字节，路径限定在包目录内，上限 1 MiB。
+- `extend.decrypt{algorithm, key, iv, data, tag, aad?}`：AES-GCM 解密，`key`/`iv`/`data`/`tag` 均为原始字节；`algorithm` 为 `aes-256-gcm`（默认）、`aes-192-gcm` 或 `aes-128-gcm`，`iv` 为 12 字节、`tag` 为 16 字节，认证失败即报错。
+- `extend.load(source, name?)`：在同一个沙箱、同样的内存与指令预算下编译并运行一段源码（通常是刚解密出的明文），返回其返回值。只接受文本源码，不接受字节码。
+
+典型流程：处理函数先核验访问权限取回密钥，再读取密文、解密、加载，然后把加载结果作为本包其余逻辑的实现：
+
+```lua
+local extend = ...
+local handlers, protected = {}, nil
+function handlers.open(request, reply)
+  local ok, result = pcall(function()
+    if not protected then
+      -- 向自己的端点核验访问权限、取回密钥，这里用传入参数示意
+      local blob = extend.resource("secret.bin")
+      local source = extend.decrypt{
+        key = extend.b64decode(request.key),
+        iv = extend.b64decode(request.iv),
+        tag = extend.b64decode(request.tag),
+        data = blob,
+      }
+      protected = extend.load(source, "secret")
+    end
+    return protected(request.input)
+  end)
+  if ok then reply(result) else reply(nil, { code = "LOCKED", message = tostring(result) }) end
+end
+return handlers
+```
+
+密钥、IV、认证标签与密文如何分发与保管由包自己决定；加载器只提供“核验后在内存解密并加载”这一机制，不保存密钥，也不限制逻辑如何取得密钥。被解密出的处理函数由本包的已声明处理函数内部调用，不能登记为 `contributes.methods` / 菜单 / MCP 工具（这些在加载时就要求处理函数已存在）。
 
 ## 网络
 
@@ -173,7 +212,7 @@ end
 
 | 平台 | 状态 |
 | --- | --- |
-| Windows x64 | 已实现；独立 fixture 宿主验证了依赖解析、授权与拒绝、存储读写、缺少能力时不加载、运行时卸载与恢复、包代码处理调用、依赖包代码被调用、失控代码被终止、运行时隔离，以及包开启本机 HTTP 服务并经出站请求访问它、令牌校验和非回环 `http://` 被拒绝。HTTPS 与证书校验用独立程序对公网站点验证过。尚未在 SV2 宿主中验证，包括离线策略对包请求的影响。 |
+| Windows x64 | 已实现；独立 fixture 宿主验证了依赖解析、授权与拒绝、存储读写、缺少能力时不加载、运行时卸载与恢复、包代码处理调用、依赖包代码被调用、失控代码被终止、运行时隔离，包读取自带密文、在内存解密并加载执行且篡改密文被拒绝，以及包开启本机 HTTP 服务并经出站请求访问它、令牌校验和非回环 `http://` 被拒绝。HTTPS 与证书校验用独立程序对公网站点验证过。尚未在 SV2 宿主中验证，包括离线策略对包请求的影响。 |
 | macOS | 尚未实现；无原生库的包会被跳过。 |
 
 包代码目前只有 Lua 运行时。向宿主用户脚本（官方 Lua/JS）提供模块尚未实现。

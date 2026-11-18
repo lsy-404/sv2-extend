@@ -49,6 +49,7 @@ inline const std::vector<Capability> &catalog(){
   {"storage","1",false,"读写扩展包自己的数据",{"storage.read","storage.write"}},
   {"profile.clean","1",false,"启动干净的宿主配置",{}},
   {"runtime.lua","5.5.1",false,"在隔离的 Lua 运行时中执行扩展包代码",{}},
+  {"runtime.protected","1",false,"读取自带密文并在内存中解密、加载扩展包逻辑",{}},
   {"editor.read","1",true,"读取工程、选区与音高",{"selection.read","pitch.read_range"}},
   {"editor.write","1",true,"修改音符、音符组与音高",{"notes.set_pitch","notes.add","notes.remove","groups.create","groups.remove","pitch.replace_range"}},
   {"transport.read","1",true,"读取播放状态",{"transport.status"}},

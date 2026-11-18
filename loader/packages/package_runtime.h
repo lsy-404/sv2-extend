@@ -18,11 +18,30 @@ namespace package_runtime {
 using json=nlohmann::json;
 using Done=std::function<void(const json&)>;
 // request completes on the Loader main thread, at most once; log is main-thread.
-struct Host{std::function<void(const std::string &method,const json &arguments,Done done)> request;std::function<void(const std::string &text)> log;};
+// resource and decrypt are synchronous main-thread primitives for sealed logic;
+// they are set only when the package declared the runtime.protected facet.
+struct Host{
+ std::function<void(const std::string &method,const json &arguments,Done done)> request;
+ std::function<void(const std::string &text)> log;
+ std::function<bool(const std::string &name,std::string &data,std::string &error)> resource;
+ std::function<bool(const std::string &algorithm,const std::string &key,const std::string &iv,const std::string &data,const std::string &tag,const std::string &aad,std::string &out,std::string &error)> decrypt;
+};
 constexpr const char *lua_version="5.5.1";
 constexpr size_t memory_limit=16*1024*1024,source_limit=262144;
 constexpr long long instruction_budget=20000000;
 inline json failure(const char *code,const std::string &message=std::string()){json error{{"code",code}};if(!message.empty())error["message"]=message.substr(0,512);return {{"ok",false},{"error",error}};}
+inline std::string base64_encode(const std::string &input){
+ static const char *table="ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";std::string out;out.reserve((input.size()+2)/3*4);
+ size_t index=0;while(index+3<=input.size()){unsigned long v=(unsigned char)input[index]<<16|(unsigned char)input[index+1]<<8|(unsigned char)input[index+2];out+=table[v>>18&63];out+=table[v>>12&63];out+=table[v>>6&63];out+=table[v&63];index+=3;}
+ if(size_t left=input.size()-index){unsigned long v=(unsigned char)input[index]<<16|(left==2?(unsigned char)input[index+1]<<8:0);out+=table[v>>18&63];out+=table[v>>12&63];out+=left==2?table[v>>6&63]:'=';out+='=';}
+ return out;
+}
+inline bool base64_decode(const std::string &input,std::string &out){
+ auto value=[](unsigned char c)->int{if(c>='A'&&c<='Z')return c-'A';if(c>='a'&&c<='z')return c-'a'+26;if(c>='0'&&c<='9')return c-'0'+52;if(c=='+')return 62;if(c=='/')return 63;return -1;};
+ out.clear();out.reserve(input.size()/4*3);int bits=0,accumulated=0;
+ for(unsigned char c:input){if(c=='='||c=='\r'||c=='\n'||c==' '||c=='\t')continue;int digit=value(c);if(digit<0)return false;accumulated=accumulated<<6|digit;if((bits+=6)>=8){bits-=8;out+=char(accumulated>>bits&0xff);}}
+ return true;
+}
 
 class Runtime:public std::enable_shared_from_this<Runtime>{
 public:
@@ -146,6 +165,33 @@ private:
   if(!lua_isfunction(L,-1))return luaL_error(L,"handler %s is not defined",handler->c_str());
   push(L,*arguments,0);lua_pushvalue(L,3);lua_pushcclosure(L,reply,1);lua_call(L,2,0);return 0;
  }
+ static int encode(lua_State *L){size_t length=0;auto text=luaL_checklstring(L,1,&length);auto out=base64_encode(std::string(text,length));lua_pushlstring(L,out.data(),out.size());return 1;}
+ static int decode(lua_State *L){size_t length=0;auto text=luaL_checklstring(L,1,&length);std::string out;if(!base64_decode(std::string(text,length),out))return luaL_error(L,"invalid base64");lua_pushlstring(L,out.data(),out.size());return 1;}
+ // Reads one of the package's own bundled files as raw bytes; the Loader keeps the read inside the package folder.
+ static int resource(lua_State *L){
+  auto runtime=self(L);size_t length=0;auto name=luaL_checklstring(L,1,&length);std::string data,error;
+  if(!runtime->host.resource)return luaL_error(L,"resources are unavailable");
+  if(!runtime->host.resource(std::string(name,length),data,error))return luaL_error(L,"resource %s: %s",std::string(name,length).c_str(),error.c_str());
+  lua_pushlstring(L,data.data(),data.size());return 1;
+ }
+ // AES-GCM decryption of sealed logic; key, iv, data and tag are raw bytes.
+ static int decrypt(lua_State *L){
+  auto runtime=self(L);luaL_checktype(L,1,LUA_TTABLE);
+  auto field=[&](const char *name)->std::string{lua_getfield(L,1,name);size_t size=0;auto text=lua_tolstring(L,-1,&size);std::string value=text?std::string(text,size):std::string();lua_pop(L,1);return value;};
+  std::string algorithm=field("algorithm");if(algorithm.empty())algorithm="aes-256-gcm";
+  std::string key=field("key"),iv=field("iv"),data=field("data"),tag=field("tag"),aad=field("aad"),out,error;
+  if(!runtime->host.decrypt)return luaL_error(L,"decryption is unavailable");
+  if(key.empty()||iv.empty()||tag.empty())return luaL_error(L,"key, iv and tag are required");
+  if(!runtime->host.decrypt(algorithm,key,iv,data,tag,aad,out,error))return luaL_error(L,"decrypt failed: %s",error.c_str());
+  lua_pushlstring(L,out.data(),out.size());return 1;
+ }
+ // Compiles and runs decrypted source in the same sandbox, under the same budgets, and returns its value.
+ static int load_module(lua_State *L){
+  size_t length=0;auto text=luaL_checklstring(L,1,&length);if(length>source_limit)return luaL_error(L,"module too large");
+  auto label=luaL_optlstring(L,2,"module",nullptr);std::string name=std::string("=")+label;
+  if(luaL_loadbufferx(L,text,length,name.c_str(),"t")!=LUA_OK)return lua_error(L);
+  lua_pushvalue(L,lua_upvalueindex(1));lua_call(L,1,1);return 1;
+ }
  static int prepare(lua_State *L){
   auto runtime=self(L);auto id=static_cast<const std::string*>(lua_touserdata(L,1));auto version=static_cast<const std::string*>(lua_touserdata(L,2));auto source=static_cast<const std::string*>(lua_touserdata(L,3));
   const luaL_Reg libraries[]={{LUA_GNAME,luaopen_base},{LUA_COLIBNAME,luaopen_coroutine},{LUA_TABLIBNAME,luaopen_table},{LUA_STRLIBNAME,luaopen_string},{LUA_MATHLIBNAME,luaopen_math},{LUA_UTF8LIBNAME,luaopen_utf8}};
@@ -154,7 +200,10 @@ private:
   lua_getglobal(L,LUA_STRLIBNAME);lua_pushnil(L);lua_setfield(L,-2,"dump");lua_pop(L,1);
   lua_pushcfunction(L,print);lua_setglobal(L,"print");
   auto name="@"+*id+"/main.lua";if(luaL_loadbufferx(L,source->data(),source->size(),name.c_str(),"t")!=LUA_OK)return lua_error(L);
-  lua_createtable(L,0,3);lua_pushcfunction(L,request);lua_setfield(L,-2,"request");lua_pushcfunction(L,print);lua_setfield(L,-2,"log");
+  lua_createtable(L,0,8);lua_pushcfunction(L,request);lua_setfield(L,-2,"request");lua_pushcfunction(L,print);lua_setfield(L,-2,"log");
+  lua_pushcfunction(L,encode);lua_setfield(L,-2,"b64encode");lua_pushcfunction(L,decode);lua_setfield(L,-2,"b64decode");
+  // Sealed-logic primitives appear only for a package that declared runtime.protected.
+  if(runtime->host.decrypt){lua_pushcfunction(L,resource);lua_setfield(L,-2,"resource");lua_pushcfunction(L,decrypt);lua_setfield(L,-2,"decrypt");lua_pushvalue(L,-1);lua_pushcclosure(L,load_module,1);lua_setfield(L,-2,"load");}
   lua_createtable(L,0,2);lua_pushlstring(L,id->data(),id->size());lua_setfield(L,-2,"id");lua_pushlstring(L,version->data(),version->size());lua_setfield(L,-2,"version");lua_setfield(L,-2,"package");
   lua_call(L,1,1);if(!lua_istable(L,-1))return luaL_error(L,"the main chunk must return a table of handlers");
   runtime->module=luaL_ref(L,LUA_REGISTRYINDEX);return 0;
