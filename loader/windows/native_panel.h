@@ -139,8 +139,8 @@ static bool reconcile(Pane &pane){
  }else {
   auto found=plugins.find(pane.id);if(found!=plugins.end()){auto &plugin=found->second;
    add("title",pane.id,"title","label",plugin.descriptor["sidebar"]["title"],json());add("status",pane.id,"status","label",plugin.descriptor["status"],json());
-   size_t index=0;for(const auto &row:plugin.descriptor["sidebar"]["rows"]){auto type=row["type"].get<std::string>();auto key=type=="button"?row["id"].get<std::string>():std::to_string(index);add("row/"+type+"/"+key,pane.id,key,type=="button"?"action":"label",row["text"],json());++index;}
    std::string section;for(const auto &field:plugin.descriptor["settings"]){auto key=field["key"].get<std::string>(),type=field["type"].get<std::string>();if(field.contains("section")){auto next=field["section"].get<std::string>();if(next!=section){section=next;add("section/"+key,pane.id,key,"label",section,json());}}if(type!="boolean")add("caption/"+key,pane.id,key,"label",field["title"],json());add("setting/"+key,pane.id,key,type,field["title"],plugin.values[key],field);if(field.contains("detail"))add("detail/"+key,pane.id,key,"label",field["detail"],json());}
+   size_t index=0;for(const auto &row:plugin.descriptor["sidebar"]["rows"]){auto type=row["type"].get<std::string>();auto key=type=="button"?row["id"].get<std::string>():std::to_string(index);add("row/"+type+"/"+key,pane.id,key,type=="button"?"action":"label",row["text"],json());++index;}
   }
  }
  for(auto it=pane.controls.begin();it!=pane.controls.end();){if(!wanted.count(it->first)){if(it->second->destroy())it=pane.controls.erase(it);else{ok=false;++it;}}else ++it;}

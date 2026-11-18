@@ -48,6 +48,7 @@ try:
     before=tool('state',{});print(json.dumps(before),flush=True)
     assert len(before['views'])==1 and before['foreignContentWindows']==0
     view=before['views'][0]
+    assert view['order'].index('setting/notes') < view['order'].index('row/button/probe')
     assert view['ready'] and view['mountedToPane'] and view['toggleNative'] and view['buttonNative'] and view['toggleVisible']
     assert before['nativeStringRoundTrip'] and view['nativeLabelMeasured']
     assert view['choiceReadable'] and view['selected'] in (1,2) and view['textReadable']
@@ -66,6 +67,7 @@ try:
     for _ in range(5):
         tool('refresh',{});time.sleep(.1)
     current=tool('state',{})
+    assert current['views'][0]['order']==view['order']
     assert current['views'][0]['ready'] and current['views'][0]['mountedToPane'] and current['views'][0]['toggleVisible']
     assert current['settings']['notes']=='Native updated 中文' and current['settings']['selection']=='Third choice'
     tool('clear',{})

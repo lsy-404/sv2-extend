@@ -14,6 +14,7 @@
 namespace network_scope {
 struct Job {
  bool child_scope=false,self_present=false;DWORD error=ERROR_SUCCESS,child_count=0;
+ std::vector<DWORD> members;
 };
 struct Network {
  bool complete=false;DWORD tcp4_error=ERROR_SUCCESS,tcp6_error=ERROR_SUCCESS,udp4_error=ERROR_SUCCESS,udp6_error=ERROR_SUCCESS;
@@ -32,7 +33,7 @@ inline Job job(){
   std::vector<unsigned char> buffer(size);auto list=reinterpret_cast<JOBOBJECT_BASIC_PROCESS_ID_LIST*>(buffer.data());
   if(QueryInformationJobObject(handle,JobObjectBasicProcessIdList,list,static_cast<DWORD>(size),nullptr)){
    if(list->NumberOfProcessIdsInList!=list->NumberOfAssignedProcesses||list->NumberOfProcessIdsInList>(size-sizeof(DWORD)*2)/sizeof(ULONG_PTR)){result.error=ERROR_MORE_DATA;return result;}
-   for(DWORD i=0;i<list->NumberOfProcessIdsInList;i++)if(list->ProcessIdList[i]==GetCurrentProcessId())result.self_present=true;
+   for(DWORD i=0;i<list->NumberOfProcessIdsInList;i++){auto pid=static_cast<DWORD>(list->ProcessIdList[i]);result.members.push_back(pid);if(pid==GetCurrentProcessId())result.self_present=true;}
    if(!result.self_present){result.error=ERROR_INVALID_DATA;return result;}result.child_count=list->NumberOfAssignedProcesses-1;result.child_scope=result.child_count==0;return result;
   }
   DWORD error=GetLastError();if(error!=ERROR_MORE_DATA){result.error=error;return result;}if(size>=1048576){result.error=ERROR_INSUFFICIENT_BUFFER;return result;}size*=2;

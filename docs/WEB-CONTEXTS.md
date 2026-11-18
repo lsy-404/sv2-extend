@@ -2,7 +2,7 @@
 
 `retire_host_web_contexts` 是独立的版本化 API，回收已观察的网页渲染和 WebKit 网络进程。旧 `retire_host_web_renderers` 继续只承诺渲染进程回收。普通联网开关不会自动执行这两种破坏性操作；它们没有作为 MCP、Lua 或 JS 工具公开。
 
-新函数追加在 `loader_api_v1` 偏移 240，在 0.9.9 追加时 64 位结构长度为 248；后续 SDK 继续在尾部追加字段。旧字段位置不变；调用方同时检查长度、`LOADER_CAP_WEB_CONTEXT_RETIREMENT` 和函数指针。Windows 受管宿主实现并公布该能力；Windows 的 `retire_host_web_renderers` 单独入口仍返回 `LOADER_ERR_NOT_SUPPORTED`。
+新函数追加在 `loader_api_v1` 偏移 240，在 0.9.9 追加时 64 位结构长度为 248；后续 SDK 继续在尾部追加字段。旧字段位置不变；调用方同时检查长度、`LOADER_CAP_WEB_CONTEXT_RETIREMENT` 和函数指针。Windows 不公布这两项回收能力，调用返回 `LOADER_ERR_NOT_SUPPORTED`；该平台的普通断网保留原生 controller 和本地页面。
 
 ```c
 if (api->struct_size >= offsetof(loader_api_v1, retire_host_web_contexts)
@@ -15,7 +15,7 @@ if (api->struct_size >= offsetof(loader_api_v1, retire_host_web_contexts)
 
 调用者必须在主线程、策略已请求阻断、代次匹配且持有 profile 独占租约时调用，并保持租约到回调返回。立即拒绝的调用不回调；已接受调用在主线程恰好完成一次，回调执行期间仍计入未排空工作。共享租约、错误代次、空回调和并行回收会被拒绝；等待期间策略或租约变化会失败。
 
-在 Windows，主线程在阻断策略已应用、持有独占租约且代次匹配时，等待 WebView 环境和 controller 回调完成，关闭已观察的 controller，并核对受管 Job 中无其他子进程。未知进程、回调或未覆盖入口会拒绝完成；成功不替代网络状态验证。
+Windows 复用已安装的 WebView Runtime，通过宿主内传输门禁阻断网页网络。离线期间仍立即完成原生 environment 和 controller 创建，不关闭宿主持有的 controller；恢复联网继续使用同一页面。账号插件等待 `verify_host_network_quiescence`，无需执行网页回收。
 
 以下为 macOS 的 WebKit 实现和验证范围。Core 弱引用观察 default、named、nonPersistent 以及可用的私有配置 factory，并观察配置赋值和实际 WebView 的 store。它不为追踪延长 ephemeral store 的 cookie 寿命。超过 256 个已观察 store 后拒绝回收确认。无法匹配的原生网络进程、缺少 SPI 或观察失败不会被解释为排空成功。
 

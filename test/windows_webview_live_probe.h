@@ -1,4 +1,5 @@
 #pragma once
+#include <winsock2.h>
 #include <windows.h>
 #include <atomic>
 #include <memory>
@@ -8,7 +9,7 @@
 namespace windows_webview_live_probe {
 struct State {bool pending=false,environmentCompleted=false,controllerCompleted=false,controllerCreated=false,windowExists=false;int32_t factoryResult=0,error=0;};
 struct Shared {
- DWORD thread=0;HWND window=nullptr;std::atomic<bool> pending{false},environmentCompleted{false},controllerCompleted{false},controllerCreated{false};std::atomic<int32_t> factoryResult{0},error{0};
+ DWORD thread=0;HWND window=nullptr;IUnknown *controller=nullptr;std::atomic<bool> pending{false},environmentCompleted{false},controllerCompleted{false},controllerCreated{false};std::atomic<int32_t> factoryResult{0},error{0};
 };
 struct Handler final:windows_webview_gate::Completion {
  std::atomic<ULONG> refs{1};std::shared_ptr<Shared> shared;bool environment;
@@ -27,7 +28,7 @@ struct Handler final:windows_webview_gate::Completion {
    HRESULT create=reinterpret_cast<windows_webview_gate::ControllerCreate>(table[3])(object,shared->window,next);next->Release();
    if(FAILED(create)&&!shared->controllerCompleted.load()){shared->error=create;shared->pending=false;}return S_OK;
   }
-  shared->controllerCompleted=true;shared->controllerCreated=SUCCEEDED(result)&&object;if(FAILED(result)||!object)shared->error=FAILED(result)?result:E_UNEXPECTED;shared->pending=false;return S_OK;
+  shared->controllerCompleted=true;shared->controllerCreated=SUCCEEDED(result)&&object;if(SUCCEEDED(result)&&object){object->AddRef();shared->controller=object;}else shared->error=FAILED(result)?result:E_UNEXPECTED;shared->pending=false;return S_OK;
  }
 };
 inline bool empty_directory(const std::wstring &path){
@@ -40,7 +41,7 @@ class Probe {
 public:
  explicit Probe(DWORD owner):shared_(std::make_shared<Shared>()){shared_->thread=owner;}
  HRESULT start(const std::wstring &directory){
-  if(GetCurrentThreadId()!=shared_->thread)return RPC_E_WRONG_THREAD;auto gate=windows_webview_gate::state();if(!gate.installed||!gate.factoryBound||gate.blocked)return HRESULT_FROM_WIN32(ERROR_INVALID_STATE);
+  if(GetCurrentThreadId()!=shared_->thread)return RPC_E_WRONG_THREAD;auto gate=windows_webview_gate::state();if(!gate.installed||!gate.factoryBound)return HRESULT_FROM_WIN32(ERROR_INVALID_STATE);
   if(shared_->pending||shared_->window||!empty_directory(directory))return E_INVALIDARG;
   HWND window=CreateWindowExW(0,L"STATIC",L"",WS_OVERLAPPED,0,0,1,1,nullptr,nullptr,GetModuleHandleW(nullptr),nullptr);if(!window)return HRESULT_FROM_WIN32(GetLastError());shared_->window=window;
   shared_->pending=true;shared_->environmentCompleted=false;shared_->controllerCompleted=false;shared_->controllerCreated=false;shared_->factoryResult=0;shared_->error=0;
@@ -50,7 +51,8 @@ public:
  }
  State state()const{return {shared_->pending.load(),shared_->environmentCompleted.load(),shared_->controllerCompleted.load(),shared_->controllerCreated.load(),shared_->window&&IsWindow(shared_->window),shared_->factoryResult.load(),shared_->error.load()};}
  bool close(){
-  if(GetCurrentThreadId()!=shared_->thread||shared_->pending)return false;auto gate=windows_webview_gate::state();if(gate.controllers||gate.pendingEnvironment||gate.pendingController)return false;
+  if(GetCurrentThreadId()!=shared_->thread||shared_->pending)return false;
+  if(shared_->controller){auto table=*reinterpret_cast<void***>(shared_->controller);if(!table||!table[24]||FAILED(reinterpret_cast<windows_webview_gate::ControllerClose>(table[24])(shared_->controller)))return false;shared_->controller->Release();shared_->controller=nullptr;}
   if(shared_->window&&!DestroyWindow(shared_->window))return false;shared_->window=nullptr;return true;
  }
 };

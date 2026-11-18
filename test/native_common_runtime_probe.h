@@ -19,7 +19,7 @@ static json snapshot(){
  if(mounted_all)for(auto &entry:p->controls)mounted_all=mounted_all&&mounted(entry.second->component(),p->content.object);
  if(valid){native_widget_listener::get_toggle(toggle->toggle.listener,checked);choice->choice.get(selected);textbox->textbox.get_text(text);}
  int scroll_top=0;if(p->content.object)std::memcpy(&scroll_top,static_cast<unsigned char*>(p->content.object)+0x3c,sizeof scroll_top);
- views.push_back({{"ready",valid},{"mountedToPane",mounted_all},{"toggleNative",native},{"buttonNative",control("row/button/probe")&&control("row/button/probe")->button.component()!=nullptr},{"toggleVisible",visible},{"checked",checked},{"choiceReadable",valid},{"selected",selected},{"textReadable",valid},{"text",text},{"nativeControlCount",p->controls.size()},{"nativeLabelMeasured",control("status")&&control("status")->measured_width>0},{"scrollTop",scroll_top}});
+ views.push_back({{"order",p->order},{"ready",valid},{"mountedToPane",mounted_all},{"toggleNative",native},{"buttonNative",control("row/button/probe")&&control("row/button/probe")->button.component()!=nullptr},{"toggleVisible",visible},{"checked",checked},{"choiceReadable",valid},{"selected",selected},{"textReadable",valid},{"text",text},{"nativeControlCount",p->controls.size()},{"nativeLabelMeasured",control("status")&&control("status")->measured_width>0},{"scrollTop",scroll_top}});
  }
  return {{"hostPid",GetCurrentProcessId()},{"rootReady",editor_autostart::root_ready()},{"categoryReady",native_category_registry::prepared},{"views",views},{"settingsEvents",settings_events},{"actionEvents",action_events},{"settings",values},{"nativeStringRoundTrip",strings_ok},{"foreignContentWindows",0}};
 }
