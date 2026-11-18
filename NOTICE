@@ -9,3 +9,6 @@ and plugins/lua-extend/lua/sv2_extend_json.lua.
 
 MinHook — BSD 2-Clause License, with bundled HDE notices.
 See loader/windows/vendor/minhook/LICENSE.txt.
+
+Lua 5.5.1 — MIT License, Copyright (C) 1994-2026 Lua.org, PUC-Rio.
+See loader/packages/vendor/lua/LICENSE.txt.

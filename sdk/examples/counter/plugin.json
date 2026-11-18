@@ -1,0 +1,25 @@
+{
+  "schema": 1,
+  "id": "example.counter",
+  "name": "Counter",
+  "version": "1.0.0",
+  "requires": {
+    "loader": ">=0.10",
+    "capabilities": { "runtime.lua": ">=5.5", "mcp.tools": "*", "panel": "*", "storage": "*" }
+  },
+  "main": "main.lua",
+  "contributes": {
+    "methods": ["increment"],
+    "mcpTools": [
+      {
+        "name": "svext_counter_increment",
+        "description": "Add to the counter kept in this package's data and return the new value.",
+        "inputSchema": { "type": "object", "properties": { "by": { "type": "integer" } }, "additionalProperties": false },
+        "call": { "handler": "increment" }
+      }
+    ],
+    "panel": {
+      "menu": [{ "id": "increment", "title": "Add one", "call": { "handler": "increment", "arguments": { "by": 1 } } }]
+    }
+  }
+}

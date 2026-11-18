@@ -47,6 +47,7 @@ inline const std::vector<Capability> &catalog(){
   {"mcp.tools","1",false,"发布 MCP 工具",{}},
   {"panel","1",false,"在 Extend 中注册面板与菜单",{}},
   {"storage","1",false,"读写扩展包自己的数据",{"storage.read","storage.write"}},
+  {"runtime.lua","5.5.1",false,"在隔离的 Lua 运行时中执行扩展包代码",{}},
   {"editor.read","1",true,"读取工程、选区与音高",{"selection.read","pitch.read_range"}},
   {"editor.write","1",true,"修改音符、音符组与音高",{"notes.set_pitch","notes.add","notes.remove","groups.create","groups.remove","pitch.replace_range"}},
   {"transport.read","1",true,"读取播放状态",{"transport.status"}},
@@ -65,13 +66,14 @@ inline bool identifier(const std::string &id){if(id.empty()||id.size()>96||!isal
 // Domains no capability provider may claim.
 inline bool reserved_domain(const std::string &name){auto domain=name.substr(0,name.find('.'));for(auto reserved:{"account","session","license","private","auth","ui","runtime","package","storage"})if(domain==reserved)return true;return false;}
 
-struct Call{std::string method;json arguments=json::object();};
+// A call targets a capability method, or a handler in the package's own code.
+struct Call{std::string method,handler;json arguments=json::object();};
 struct Tool{std::string name,method;json description,inputSchema;Call call;};
 // A menu is at most two levels: actions, or titled groups of actions.
 struct MenuItem{std::string id,title;bool group=false;Call call;};
 struct Manifest{
- std::string id,name,version,loader="*";bool enabled=true,native=false,panel=false;
- std::map<std::string,std::string> capabilities,packages;std::vector<std::string> permissions;std::vector<Tool> tools;std::vector<MenuItem> menu;
+ std::string id,name,version,loader="*",main;bool enabled=true,native=false,panel=false;
+ std::map<std::string,std::string> capabilities,packages;std::vector<std::string> permissions,methods;std::vector<Tool> tools;std::vector<MenuItem> menu;
  bool permits(const std::string &key)const{for(const auto &entry:permissions)if(entry==key)return true;return false;}
 };
 inline bool text(const json &value,size_t limit){return value.is_string()&&!value.get_ref<const std::string&>().empty()&&value.get_ref<const std::string&>().size()<=limit;}
@@ -85,9 +87,10 @@ inline bool keys_within(const json &object,std::initializer_list<const char*> al
 // permission; any other target belongs to a required package and is resolved
 // when it is called.
 inline bool parse_call(const json &value,const Manifest &manifest,Call &out){
- if(!value.is_object()||!keys_within(value,{"method","arguments"})||!value.contains("method")||!value["method"].is_string())return false;
- out.method=value["method"].get<std::string>();out.arguments=value.value("arguments",json::object());
- if(!identifier(out.method)||!out.arguments.is_object()||out.arguments.dump().size()>65536)return false;
+ if(!value.is_object()||!keys_within(value,{"method","handler","arguments"})||value.contains("method")==value.contains("handler"))return false;
+ out.arguments=value.value("arguments",json::object());if(!out.arguments.is_object()||out.arguments.dump().size()>65536)return false;
+ if(value.contains("handler")){if(!value["handler"].is_string())return false;out.handler=value["handler"].get<std::string>();return identifier(out.handler)&&!manifest.main.empty();}
+ if(!value["method"].is_string())return false;out.method=value["method"].get<std::string>();if(!identifier(out.method))return false;
  if(auto owner=capability_for_method(out.method))return owner->grantable?manifest.permits(owner->id):manifest.capabilities.count(owner->id)!=0;
  return !reserved_domain(out.method)&&!manifest.packages.empty();
 }
@@ -99,7 +102,7 @@ inline std::string parse(const json &definition,Manifest &out){
  out.id=definition["id"].get<std::string>();
  if(definition.contains("enabled")){if(!definition["enabled"].is_boolean())return "enabled";out.enabled=definition["enabled"].get<bool>();}
  out.native=definition.contains("nativeLibraries");
- bool declarative=definition.contains("permissions")||definition.contains("contributes");
+ bool declarative=definition.contains("permissions")||definition.contains("contributes")||definition.contains("main");
  if(!out.native&&!declarative)return "empty";
  if(definition.contains("name")){if(!text(definition["name"],128))return "name";out.name=definition["name"].get<std::string>();}
  if(definition.contains("version")){Version parsed;if(!definition["version"].is_string()||!parse_version(definition["version"].get<std::string>(),parsed))return "version";out.version=definition["version"].get<std::string>();}
@@ -121,9 +124,13 @@ inline std::string parse(const json &definition,Manifest &out){
    out.permissions.push_back(key);
   }
  }
+ if(definition.contains("main")){
+  if(out.native||!text(definition["main"],512)||!out.capabilities.count("runtime.lua"))return "main";out.main=definition["main"].get<std::string>();
+  if(out.main.size()<5||out.main.compare(out.main.size()-4,4,".lua")!=0)return "main";
+ }
  if(definition.contains("contributes")){
   // Unknown contribution kinds fail closed so a package is never half-enabled.
-  const auto &contributes=definition["contributes"];if(out.native||!contributes.is_object()||!keys_within(contributes,{"mcpTools","panel"}))return "contributes";
+  const auto &contributes=definition["contributes"];if(out.native||!contributes.is_object()||!keys_within(contributes,{"mcpTools","panel","methods"}))return "contributes";
   if(contributes.contains("mcpTools")){
    const auto &tools=contributes["mcpTools"];if(!tools.is_array()||tools.empty()||tools.size()>64||!out.capabilities.count("mcp.tools")||reserved_domain(out.id))return "mcpTools";
    std::set<std::string> names;
@@ -133,6 +140,15 @@ inline std::string parse(const json &definition,Manifest &out){
     if(tool.name.rfind("svext_",0)!=0||!identifier(tool.name)||!identifier(tool.method)||!names.insert(tool.name).second)return "mcpTools";
     if(!parse_call(entry["call"],out,tool.call))return "undeclared-call";
     tool.description=entry["description"];tool.inputSchema=entry["inputSchema"];out.tools.push_back(std::move(tool));
+   }
+  }
+  if(contributes.contains("methods")){
+   // Handlers other packages may call as "<id>.<name>" once they depend on this package.
+   const auto &methods=contributes["methods"];if(!methods.is_array()||methods.empty()||methods.size()>64||out.main.empty()||reserved_domain(out.id))return "methods";
+   for(const auto &entry:methods){
+    if(!entry.is_string())return "methods";auto name=entry.get<std::string>();bool repeated=false;for(const auto &known:out.methods)repeated=repeated||known==name;
+    if(repeated||!identifier(name)||name.find('.')!=std::string::npos||name.rfind("svext_",0)==0||!identifier(out.id+"."+name))return "methods";
+    out.methods.push_back(name);
    }
   }
   if(contributes.contains("panel")){

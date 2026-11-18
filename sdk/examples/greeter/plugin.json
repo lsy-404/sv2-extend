@@ -5,38 +5,112 @@
   "version": "1.0.0",
   "requires": {
     "loader": ">=0.10",
-    "capabilities": { "mcp.tools": "*", "panel": "*", "storage": "*" },
-    "packages": { "example.hello": ">=1.0" }
+    "capabilities": {
+      "mcp.tools": "*",
+      "panel": "*",
+      "storage": "*"
+    },
+    "packages": {
+      "example.hello": ">=1.0",
+      "example.counter": ">=1.0"
+    }
   },
-  "permissions": ["package.example.hello"],
+  "permissions": [
+    "package.example.hello",
+    "package.example.counter"
+  ],
   "contributes": {
     "mcpTools": [
       {
         "name": "svext_greeter_greet",
         "description": "Read the greeting provided by the Hello package.",
-        "inputSchema": { "type": "object", "properties": {}, "additionalProperties": false },
-        "call": { "method": "hello.greet" }
+        "inputSchema": {
+          "type": "object",
+          "properties": {},
+          "additionalProperties": false
+        },
+        "call": {
+          "method": "hello.greet"
+        }
       },
       {
         "name": "svext_greeter_remember",
         "description": "Store a note in this package's own data.",
-        "inputSchema": { "type": "object", "properties": { "value": { "type": "string" } }, "required": ["value"], "additionalProperties": false },
-        "call": { "method": "storage.write", "arguments": { "key": "note" } }
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "value": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "value"
+          ],
+          "additionalProperties": false
+        },
+        "call": {
+          "method": "storage.write",
+          "arguments": {
+            "key": "note"
+          }
+        }
       },
       {
         "name": "svext_greeter_recall",
         "description": "Read the note stored by this package.",
-        "inputSchema": { "type": "object", "properties": {}, "additionalProperties": false },
-        "call": { "method": "storage.read", "arguments": { "key": "note" } }
+        "inputSchema": {
+          "type": "object",
+          "properties": {},
+          "additionalProperties": false
+        },
+        "call": {
+          "method": "storage.read",
+          "arguments": {
+            "key": "note"
+          }
+        }
+      },
+      {
+        "name": "svext_greeter_count",
+        "description": "Count a greeting using the Counter package.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {},
+          "additionalProperties": false
+        },
+        "call": {
+          "method": "example.counter.increment",
+          "arguments": {
+            "by": 1
+          }
+        }
       }
     ],
     "panel": {
       "menu": [
         {
           "title": "Hello",
-          "items": [{ "id": "greet", "title": "Read greeting", "call": { "method": "hello.greet" } }]
+          "items": [
+            {
+              "id": "greet",
+              "title": "Read greeting",
+              "call": {
+                "method": "hello.greet"
+              }
+            }
+          ]
         },
-        { "id": "clear", "title": "Clear note", "call": { "method": "storage.write", "arguments": { "key": "note", "value": "" } } }
+        {
+          "id": "clear",
+          "title": "Clear note",
+          "call": {
+            "method": "storage.write",
+            "arguments": {
+              "key": "note",
+              "value": ""
+            }
+          }
+        }
       ]
     }
   }
