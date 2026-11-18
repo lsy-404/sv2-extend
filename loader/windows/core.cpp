@@ -342,8 +342,10 @@ json package_receipt(const Package &package){
  if(package.resident)result["initResult"]=package.init_result;if(!package.reason.empty())result["reason"]=package.reason;return result;
 }
 void write_package_results(const json &rejected){package_results=rejected;for(auto &entry:packages)package_results.push_back(package_receipt(*entry.second));}
+bool flag_enabled(const wchar_t *key);
 void load_packages(){
  environment.capabilities={"mcp.tools","panel","storage"};
+ if(flag_enabled(L"OPEN_SV2_CLEAN_PROFILE_SUPPORTED"))environment.capabilities.insert("profile.clean");
  if(managed&&editor_gate_result==LOADER_OK)environment.capabilities.insert({"editor.read","editor.write","transport.read","transport.control"});
  if(native_voice&&native_voice->installed)environment.capabilities.insert({"voicebanks.read","voicebanks.select"});
  if(native_export&&native_export->available)environment.capabilities.insert({"exports.read","exports.write"});

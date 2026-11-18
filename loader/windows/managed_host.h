@@ -39,17 +39,22 @@ struct State {
  HANDLE lock=INVALID_HANDLE_VALUE,job=nullptr,job_query=nullptr;LPPROC_THREAD_ATTRIBUTE_LIST attributes=nullptr;std::wstring name;fs::path host,data;bool copied=false;
  HANDLE inherited[3]{};windows_network_bootstrap::Handoff network_handoff;
  ~State(){if(attributes){DeleteProcThreadAttributeList(attributes);HeapFree(GetProcessHeap(),0,attributes);}if(lock!=INVALID_HANDLE_VALUE)CloseHandle(lock);if(job_query)CloseHandle(job_query);if(job)CloseHandle(job);}
- void prepare(const fs::path &original,const fs::path &profile,const fs::path &core,bool migrate){
+ void prepare(const fs::path &original,const fs::path &profile,const fs::path &core,bool official,bool clean){
   inspect(original.parent_path());require(safe(profile),"Profile cannot be a link");inspect(profile);
   auto name_file=profile/L"container-name.txt";
-  if(!fs::exists(name_file))for(const auto &item:fs::directory_iterator(profile))require(item.path().filename()==L"plugins","Use an empty Loader profile or an existing Loader-owned profile");
+  if(clean)require(!fs::exists(name_file),"Clean profile has already been initialized");
+  if(clean||!fs::exists(name_file))for(const auto &item:fs::directory_iterator(profile))require(item.path().filename()==L"plugins","Use an empty Loader profile or an existing Loader-owned profile");
   SECURITY_ATTRIBUTES security{sizeof security,nullptr,TRUE};lock=CreateFileW((profile/L".host.lock").c_str(),GENERIC_READ|GENERIC_WRITE,FILE_SHARE_READ,&security,OPEN_ALWAYS,FILE_ATTRIBUTE_NORMAL,nullptr);require(lock!=INVALID_HANDLE_VALUE,"The Loader profile is already in use");
+  if(clean){
+   require(!fs::exists(name_file),"Clean profile has already been initialized");
+   for(const auto &item:fs::directory_iterator(profile))require(item.path().filename()==L"plugins"||item.path().filename()==L".host.lock","Use an empty Loader profile");
+  }
   if(fs::exists(name_file)){std::wifstream stream(name_file);stream>>name;}else{name=identifier();std::wofstream stream(name_file);stream<<name;require(bool(stream),"Cannot save profile identity");}
   require(name.size()==42&&name.substr(0,10)==L"SV2Extend."&&name.find_first_not_of(L"0123456789abcdef",10)==std::wstring::npos,"Invalid profile identity");
   data=profile/L"host-data";fs::create_directories(data/L"ProgramData");fs::create_directories(data/L"Roaming");fs::create_directories(data/L"Local");fs::create_directories(data/L"LocalLow");fs::create_directories(data/L"Temp");
   auto destination=data/L"Roaming"/L"Dreamtonics"/L"Synthesizer V Studio 2";auto source=roaming()/L"Dreamtonics"/L"Synthesizer V Studio 2";
-  if(migrate&&fs::exists(source)&&!fs::exists(destination)){inspect(source);fs::create_directories(destination.parent_path());auto staging=destination.parent_path()/(L".migration-"+identifier());fs::copy(source,staging,fs::copy_options::recursive);fs::rename(staging,destination);copied=true;}
-  if(migrate){common_resources(data);editor_resources(core.parent_path(),data);}
+  if(official&&!clean&&fs::exists(source)&&!fs::exists(destination)){inspect(source);fs::create_directories(destination.parent_path());auto staging=destination.parent_path()/(L".migration-"+identifier());fs::copy(source,staging,fs::copy_options::recursive);fs::rename(staging,destination);copied=true;}
+  if(official){common_resources(data);editor_resources(core.parent_path(),data);}
   auto runtime=profile/L"runtime"/L"Synthesizer V Studio 2 Pro";
   bool update=!same_tree(original.parent_path(),runtime);
   if(update){fs::create_directories(runtime.parent_path());auto staging=runtime.parent_path()/(L".host-"+identifier());fs::copy(original.parent_path(),staging,fs::copy_options::recursive);for(const auto &item:fs::recursive_directory_iterator(original.parent_path()))if(item.is_regular_file())stamp_file(item.path(),staging/item.path().lexically_relative(original.parent_path()));if(fs::exists(runtime))fs::rename(runtime,runtime.parent_path()/(L".previous-"+identifier()));fs::rename(staging,runtime);}
