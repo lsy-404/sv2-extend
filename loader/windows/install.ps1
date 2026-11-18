@@ -71,10 +71,12 @@ foreach ($package in $PluginPackage) {
     if (Get-ChildItem -LiteralPath $folder -Force -Recurse | Where-Object { $_.Attributes -band [IO.FileAttributes]::ReparsePoint }) { throw 'Plugin packages cannot contain links.' }
     $definition = Get-Content -LiteralPath (Join-Path $folder 'plugin.json') -Raw | ConvertFrom-Json
     if ($definition.schema -ne 1 -or $definition.id -cnotmatch '^[a-zA-Z][a-zA-Z0-9._-]{0,95}$') { throw 'Invalid plugin package manifest.' }
-    if (!$definition.nativeLibraries.'windows-x86_64') { throw 'The package needs a Windows x64 native library.' }
-    $relative = [string]$definition.nativeLibraries.'windows-x86_64'
-    $library = [IO.Path]::GetFullPath((Join-Path $folder $relative))
-    if ([IO.Path]::IsPathRooted($relative) -or !$library.StartsWith($folder.TrimEnd('\') + '\', [StringComparison]::OrdinalIgnoreCase) -or !(Test-Path -LiteralPath $library -PathType Leaf)) { throw 'Invalid Windows plugin library path.' }
+    if ($definition.nativeLibraries) {
+        if (!$definition.nativeLibraries.'windows-x86_64') { throw 'The package has no Windows x64 native library.' }
+        $relative = [string]$definition.nativeLibraries.'windows-x86_64'
+        $library = [IO.Path]::GetFullPath((Join-Path $folder $relative))
+        if ([IO.Path]::IsPathRooted($relative) -or !$library.StartsWith($folder.TrimEnd('\') + '\', [StringComparison]::OrdinalIgnoreCase) -or !(Test-Path -LiteralPath $library -PathType Leaf)) { throw 'Invalid Windows plugin library path.' }
+    } elseif (!$definition.contributes -and !$definition.permissions) { throw 'The package declares neither a native library nor contributions.' }
     $helpers = @()
     if ($definition.nativeHelpers) {
         $declared = $definition.nativeHelpers.'windows-x86_64'

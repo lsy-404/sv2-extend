@@ -10,6 +10,7 @@
 #include <vector>
 #include <atomic>
 #include "vendor/json.hpp"
+#include "../packages/package_model.h"
 #include "../../sdk/include/loader_api.h"
 #include "../../sdk/include/extend_platform.h"
 #include "native_panel.h"
@@ -70,7 +71,9 @@ void category_tick(){
  auto state=native_category_registry::status();json entries=json::array();for(const auto &item:native_category_registry::categories)if(item.present){bool opened=false;bool known=native_category_registry::category_open(item.id,&opened)==0;entries.push_back({{"id",item.id},{"visible",item.visible},{"openKnown",known},{"open",known&&opened}});}auto body=json{{"hostPid",GetCurrentProcessId()},{"mainThreadId",main_thread},{"ready",state.ready},{"binding",native_category_registry::prepare_result},{"toolbarCount",state.toolbar_count},{"paneCount",state.pane_count},{"categories",entries}}.dump(2);static std::string previous;if(body==previous)return;
  std::ofstream output(root/L"outputs"/L"windows-category.json",std::ios::binary|std::ios::trunc);if(!output)return;output<<body;output.close();if(output)previous=body;
 }
-struct Provider{loader_editor_dispatch dispatch;void *owner;std::set<std::string> methods;json descriptor;};
+struct Provider{loader_editor_dispatch dispatch;void *owner;std::set<std::string> methods;json descriptor;std::string package;};
+struct Package{package_model::Manifest manifest;fs::path folder;json definition,grants=json::object();std::string state="pending",reason,last;bool visiting=false,provider=false,panel=false,enabled=true,resident=false;int init_result=0;};
+std::map<std::string,std::unique_ptr<Package>> packages;package_model::Environment environment;std::string current_package;json reload_packages();
 std::map<std::string,Provider> providers;
 struct Request{std::string method,arguments,provider;loader_json_completion completion;void *context;ULONGLONG deadline;std::atomic<bool> delivered{false};};
 // Bounded tombstones keep late callback contexts valid until host exit.
@@ -80,12 +83,12 @@ void log_message(const char *text){if(!text)return;std::string message="SV2_EXTE
 void reply(Request *r,const std::string &value){if(!r->delivered.exchange(true))r->completion(value.data(),value.size(),r->context);}
 void error(Request *r,const char *code){reply(r,json{{"ok",false},{"error",{{"code",code}}}}.dump());}
 bool id_valid(const std::string &id){if(id.empty()||id.size()>96||!isalpha((unsigned char)id[0]))return false;for(unsigned char c:id)if(!isalnum(c)&&c!='.'&&c!='_'&&c!='-')return false;return true;}
-bool public_method(const std::string &method){if(!id_valid(method))return false;const auto domain=method.substr(0,method.find('.'));return domain!="account"&&domain!="session"&&domain!="license"&&domain!="private"&&domain!="auth"&&domain!="ui"&&domain!="runtime";}
+bool public_method(const std::string &method){return id_valid(method)&&!package_model::reserved_domain(method);}
 void provider_reply(const char *body,size_t length,void *context){auto r=(Request*)context;if(!body||length>8*1024*1024){error(r,"INVALID_PROVIDER_REPLY");return;}auto parsed=json::parse(body,body+length,nullptr,false);if(parsed.is_discarded()||!parsed.is_object()){error(r,"INVALID_PROVIDER_REPLY");return;}reply(r,parsed.dump());}
 int register_provider(const char *id,loader_editor_dispatch dispatch,void *owner,const char *descriptor){
  if(!on_main()||!id||!id_valid(id)||!dispatch||!descriptor||strlen(descriptor)>65536||providers.count(id)||providers.size()>=32)return LOADER_ERR_INVALID;
  auto value=json::parse(descriptor,nullptr,false);if(!value.is_object()||!value.contains("methods")||!value["methods"].is_array()||value["methods"].empty()||value["methods"].size()>256)return LOADER_ERR_INVALID;
- Provider candidate{dispatch,owner,{},value};
+ Provider candidate{dispatch,owner,{},value,current_package};
  for(const auto &method:value["methods"]){if(!method.is_string())return LOADER_ERR_INVALID;std::string name=method;if(!public_method(name)||!candidate.methods.insert(name).second)return LOADER_ERR_INVALID;for(const auto &pair:providers)if(pair.second.methods.count(name))return LOADER_ERR_INVALID;}
  if(value.contains("tools")){
   if(!value["tools"].is_array()||value["tools"].size()>256)return LOADER_ERR_INVALID;
@@ -95,7 +98,7 @@ int register_provider(const char *id,loader_editor_dispatch dispatch,void *owner
  providers.emplace(id,std::move(candidate));++capability_generation;return LOADER_OK;
 }
 int unregister_provider(const char *id,void *owner){if(!on_main()||!id)return LOADER_ERR_INVALID;auto found=providers.find(id);if(found==providers.end()||found->second.owner!=owner)return LOADER_ERR_INVALID;providers.erase(found);++capability_generation;std::vector<Request*> pending;{std::lock_guard<std::mutex> guard(requests_mutex);for(auto &r:requests)if(r->provider==id&&!r->delivered)pending.push_back(r.get());}for(auto r:pending)error(r,"PROVIDER_REMOVED");return 0;}
-json capability_snapshot(){json methods=json::array(),tools=json::array();for(auto &entry:providers){for(auto &method:entry.second.methods)methods.push_back(method);if(entry.second.descriptor.contains("tools"))for(auto &tool:entry.second.descriptor["tools"])tools.push_back(tool);}return {{"methods",methods},{"tools",tools},{"capabilityGeneration",capability_generation}};}
+json capability_snapshot(){json methods=json::array(),tools=json::array();for(auto &entry:providers){for(auto &method:entry.second.methods)methods.push_back(method);if(entry.second.descriptor.contains("tools"))for(auto &tool:entry.second.descriptor["tools"])tools.push_back(tool);}json list=json::array();for(auto &entry:packages){auto &package=*entry.second;json grants=json::object();for(const auto &key:package_model::grantable(package.manifest,environment))grants[key]=package.grants.value("grant."+key,false);list.push_back({{"id",entry.first},{"name",package.manifest.name},{"version",package.manifest.version},{"kind",package.manifest.native?"native":"declarative"},{"state",package.state},{"reason",package.reason},{"permissions",grants}});}return {{"methods",methods},{"tools",tools},{"capabilityGeneration",capability_generation},{"loader",package_model::describe(environment)},{"packages",list}};}
 json script_call(const std::string &method,const json &args,bool javascript){
  if(!on_main())return editor_lua::Service::fail("MAIN_THREAD_REQUIRED");if(!args.is_object())return editor_lua::Service::fail("INVALID_ARGUMENT");
  if(const char *denied=script_settings::denial(javascript?js_runtime:lua_runtime,method,args))return editor_lua::Service::fail(denied);
@@ -112,6 +115,7 @@ void dispatch_request(Request *r){
  if(GetTickCount64()>=r->deadline){error(r,"TIMEOUT");return;}
  if(r->method=="runtime.info"){reply(r,json{{"ok",true},{"result",{{"hostPid",GetCurrentProcessId()},{"platform",loader_platform_key()},{"resident",true},{"editorReady",editor_online()},{"wholeHostNetworkVerified",false},{"namespaceRedirects",data_namespace::redirected.load()},{"namespaceOtherQueries",data_namespace::other.load()}}}}.dump());return;}
  if(r->method=="runtime.capabilities"){reply(r,json{{"ok",true},{"result",capability_snapshot()}}.dump());return;}
+ if(r->method=="runtime.packages.reload"){reply(r,json{{"ok",true},{"result",{{"packages",reload_packages()}}}}.dump());return;}
  if(r->method=="editor.capabilities"){json list=json::array();for(auto &pair:providers)list.push_back(json{{"id",pair.first},{"capabilities",pair.second.descriptor}});reply(r,json{{"ok",true},{"result",{{"providers",list},{"editorReady",editor_online()}}}}.dump());return;}
  for(auto &pair:providers)if(pair.second.methods.count(r->method)){r->provider=pair.first;auto dispatch=pair.second.dispatch;auto owner=pair.second.owner;dispatch(r->method.c_str(),r->arguments.c_str(),provider_reply,r,owner);return;}
  error(r,"METHOD_UNAVAILABLE");
@@ -201,37 +205,184 @@ int retire_web(uint64_t expected,loader_json_completion done,void *context){
 }
 bool regular(const fs::path &path,bool directory=false){std::error_code error;auto status=fs::symlink_status(path,error);if(error||fs::is_symlink(status))return false;DWORD attr=GetFileAttributesW(path.c_str());return attr!=INVALID_FILE_ATTRIBUTES&&!(attr&FILE_ATTRIBUTE_REPARSE_POINT)&&(directory?fs::is_directory(status):fs::is_regular_file(status));}
 void startup_receipt();
-void load_packages(){
+// Declarative packages have no code of their own: Loader performs every call
+// on their behalf, so the grant check below sees a trustworthy caller.
+struct Forward{loader_json_completion complete;void *context;};
+void forward_reply(const char *body,size_t length,void *context){auto forward=static_cast<Forward*>(context);forward->complete(body,length,forward->context);delete forward;}
+const char *permission_key(const Package &package,const std::string &target,std::string &key){
+ if(auto known=package_model::capability_for_method(target)){if(!environment.capabilities.count(known->id))return "CAPABILITY_UNSUPPORTED";key=known->id;return nullptr;}
+ for(const auto &pair:providers)if(pair.second.methods.count(target)){auto owner=packages.find(pair.second.package);if(owner==packages.end()||!owner->second->manifest.native)return "TARGET_NOT_ALLOWED";key="package."+owner->first;return package.manifest.permits(key)?nullptr:"PERMISSION_UNDECLARED";}
+ return "METHOD_UNAVAILABLE";
+}
+json storage_call(const Package &package,const std::string &method,const json &arguments){
+ if(!arguments.contains("key")||!arguments["key"].is_string())return {{"ok",false},{"error",{{"code","INVALID_ARGUMENT"}}}};
+ auto id=package.manifest.id;auto key=arguments["key"].get<std::string>();int status=LOADER_OK;json result=json::object();
+ if(method=="storage.write"){if(!arguments.contains("value"))return {{"ok",false},{"error",{{"code","INVALID_ARGUMENT"}}}};auto data=arguments["value"].dump();status=plugin_storage::write(id.c_str(),key.c_str(),reinterpret_cast<const uint8_t*>(data.data()),data.size());}
+ else{
+  size_t length=0;status=plugin_storage::read(id.c_str(),key.c_str(),nullptr,&length);
+  if(status==LOADER_ERR_NOT_FOUND)return {{"ok",true},{"result",{{"found",false},{"value",nullptr}}}};
+  if(status==LOADER_OK||status==LOADER_ERR_BUFFER_TOO_SMALL){std::vector<uint8_t> data(length);status=plugin_storage::read(id.c_str(),key.c_str(),data.data(),&length);auto value=status==LOADER_OK?json::parse(data.begin(),data.begin()+length,nullptr,false):json();if(status==LOADER_OK&&value.is_discarded())status=LOADER_ERR_STORAGE_IO;result={{"found",true},{"value",value}};}
+ }
+ if(status!=LOADER_OK)return {{"ok",false},{"error",{{"code",status==LOADER_ERR_INVALID?"INVALID_ARGUMENT":"STORAGE_ERROR"},{"status",status}}}};
+ return {{"ok",true},{"result",result}};
+}
+void execute(Package &package,const package_model::Call &call,const json &arguments,loader_json_completion complete,void *context){
+ auto finish=[&](const json &value){auto body=value.dump();complete(body.data(),body.size(),context);};
+ auto fail=[&](json error){finish({{"ok",false},{"error",std::move(error)}});};
+ if(package.state!="active"){fail({{"code","PACKAGE_UNLOADED"},{"package",package.manifest.id}});return;}
+ auto merged=arguments;for(auto item=call.arguments.begin();item!=call.arguments.end();++item)merged[item.key()]=item.value();
+ if(call.method=="storage.read"||call.method=="storage.write"){finish(storage_call(package,call.method,merged));return;}
+ std::string key;if(auto code=permission_key(package,call.method,key)){fail({{"code",code},{"package",package.manifest.id},{"method",call.method}});return;}
+ if(!package.grants.value("grant."+key,false)){fail({{"code","PERMISSION_DENIED"},{"package",package.manifest.id},{"permission",key}});return;}
+ request(call.method.c_str(),merged.dump().c_str(),forward_reply,new Forward{complete,context});
+}
+void package_dispatch(const char *method,const char *arguments,loader_json_completion complete,void *context,void *owner){
+ auto &package=*static_cast<Package*>(owner);auto parsed=json::parse(arguments,nullptr,false);
+ for(const auto &tool:package.manifest.tools)if(tool.method==method&&parsed.is_object()){execute(package,tool.call,parsed,complete,context);return;}
+ auto body=json{{"ok",false},{"error",{{"code","METHOD_UNAVAILABLE"}}}}.dump();complete(body.data(),body.size(),context);
+}
+std::string package_reason(const Package &package){
+ const auto &reason=package.reason;auto detail=reason.substr(reason.find(':')+1);
+ if(reason=="loader-version")return "需要加载器版本 "+package.manifest.loader+"，当前为 "+package_model::loader_version;
+ if(reason.rfind("missing-capability:",0)==0)return "当前加载器不提供能力 "+detail;
+ if(reason.rfind("missing-package:",0)==0)return "缺少依赖的扩展包 "+detail;
+ return "扩展包无法加载（"+reason+"）";
+}
+json package_state(const Package &package){
+ json rows=json::array();std::string status;
+ if(package.state=="disabled")status="已停用";
+ else if(package.state!="active"){status="无法加载";rows.push_back({{"type","label"},{"text",package_reason(package)}});}
+ else{
+  unsigned missing=0;for(const auto &key:package_model::grantable(package.manifest,environment))if(!package.grants.value("grant."+key,false))++missing;
+  status=missing?std::to_string(missing)+" 项权限未开启":"已启用";
+  if(!package.manifest.tools.empty())rows.push_back({{"type","label"},{"text","MCP 工具："+std::to_string(package.manifest.tools.size())+" 个"}});
+  for(const auto &item:package.manifest.menu){if(item.group)rows.push_back({{"type","label"},{"text",item.title}});else rows.push_back({{"type","button"},{"id",item.id},{"text",item.title}});}
+  if(!package.last.empty())rows.push_back({{"type","label"},{"text",package.last}});
+ }
+ return {{"status",status},{"sidebar",{{"title",package.manifest.name},{"rows",rows}}}};
+}
+// Recomputes a declarative package's state and brings its provider in line.
+void settle(Package &package){
+ if(package.state!="removed"){
+  if(!package.enabled){package.state="disabled";package.reason.clear();}
+  else{package.reason=package_model::resolve(package.manifest,environment);package.state=package.reason.empty()?"active":"failed";}
+ }
+ const auto &id=package.manifest.id;
+ if(package.state=="active"&&!package.provider&&!package.manifest.tools.empty()){
+  json methods=json::array(),tools=json::array();for(const auto &tool:package.manifest.tools){methods.push_back(tool.method);tools.push_back({{"name",tool.name},{"method",tool.method},{"description",tool.description},{"inputSchema",tool.inputSchema}});}
+  current_package=id;package.provider=register_provider(id.c_str(),package_dispatch,&package,json{{"methods",methods},{"tools",tools}}.dump().c_str())==LOADER_OK;current_package.clear();
+  if(!package.provider){package.state="failed";package.reason="provider-registration";}
+ }
+ if(package.state!="active"&&package.provider){unregister_provider(id.c_str(),&package);package.provider=false;}
+ if(package.state=="active")environment.packages[id]=package.manifest.version;else environment.packages.erase(id);
+}
+struct MenuCall{Package *package;std::string title;};
+void menu_reply(const char *body,size_t length,void *context){
+ std::unique_ptr<MenuCall> call(static_cast<MenuCall*>(context));auto value=json::parse(body,body+length,nullptr,false);auto &package=*call->package;
+ bool ok=value.is_object()&&value.value("ok",false);std::string code=ok||!value.is_object()||!value.contains("error")||!value["error"].is_object()?"":value["error"].value("code",std::string());
+ package.last=call->title+(ok?"：完成":"：失败"+(code.empty()?"":"（"+code+"）"));
+ if(package.panel)native_panel::update_ui(package.manifest.id.c_str(),package_state(package).dump().c_str(),&package);
+}
+void package_changed(const char *body,void *owner){
+ auto &package=*static_cast<Package*>(owner);auto event=body?json::parse(body,nullptr,false):json();if(!event.is_object())return;auto kind=event.value("kind",std::string());
+ if(kind=="action"&&event.contains("action")&&event["action"].is_string()){for(const auto &item:package.manifest.menu)if(!item.group&&item.id==event["action"]){execute(package,item.call,json::object(),menu_reply,new MenuCall{&package,item.title});return;}return;}
+ if(kind!="settings"||!event.contains("settings")||!event["settings"].is_object())return;
+ package.grants=event["settings"];package.enabled=package.grants.value("enabled",true);settle(package);
+ native_panel::update_ui(package.manifest.id.c_str(),package_state(package).dump().c_str(),owner);
+}
+void package_panel(Package &package){
+ json fields=json::array({{{"key","enabled"},{"title","启用扩展包"},{"type","boolean"},{"default",true}}});
+ for(const auto &key:package_model::grantable(package.manifest,environment)){
+  auto known=package_model::capability(key);std::string title=known?known->title:"调用扩展包 "+key.substr(8)+" 提供的方法",detail=key;
+  if(known){detail.clear();for(auto method:known->methods)detail+=(detail.empty()?"":"、")+std::string(method);}
+  fields.push_back({{"key","grant."+key},{"title",title},{"detail",detail},{"section","权限"},{"type","boolean"},{"default",false}});
+ }
+ auto descriptor=package_state(package);descriptor["id"]=package.manifest.id;descriptor["name"]=package.manifest.name;descriptor["version"]=package.manifest.version;descriptor["settings"]=fields;
+ package.panel=true;if(native_panel::register_ui(descriptor.dump().c_str(),package_changed,&package)!=LOADER_OK){package.panel=false;log_message("package-panel-unavailable");}
+}
+bool path_inside(const fs::path &package,const std::string &relative,const wchar_t *extension,fs::path &absolute){
+ if(relative.empty()||relative.size()>512||relative.find(':')!=std::string::npos)return false;fs::path path=fs::u8path(relative);if(path.is_absolute()||path.extension()!=extension)return false;
+ auto cursor=package;for(const auto &part:path){if(part==L".."||part==L".")return false;cursor/=part;if(!regular(cursor,cursor!=package/path))return false;}
+ absolute=(package/path).lexically_normal();auto rel=absolute.lexically_relative(package.lexically_normal());return !rel.empty()&&*rel.begin()!=L"..";
+}
+void startup_receipt();
+const char *load_native(Package &package){
+ const auto &definition=package.definition;auto key=loader_platform_key();const auto &libraries=definition["nativeLibraries"];
+ if(!libraries.is_object()||!libraries.contains(key)||!libraries[key].is_string())return "native-platform";
+ fs::path absolute;if(!path_inside(package.folder,libraries[key].get<std::string>(),L".dll",absolute))return "native-path";
+ std::vector<std::wstring> helper_paths;
+ if(definition.contains("nativeHelpers")){
+  if(!definition["nativeHelpers"].is_object())return "native-helpers";auto helpers=definition["nativeHelpers"].value(key,json::array());if(!helpers.is_array()||helpers.size()>8)return "native-helpers";
+  for(const auto &entry:helpers){fs::path helper;std::wstring physical;if(!entry.is_string()||!path_inside(package.folder,entry.get<std::string>(),L".exe",helper)||!windows_network::canonical_executable_path(helper.wstring(),physical))return "native-helpers";helper_paths.push_back(std::move(physical));}
+ }
+ auto module=LoadLibraryExW(absolute.c_str(),nullptr,LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR|LOAD_LIBRARY_SEARCH_SYSTEM32);if(!module){log_message("package-load-failed");return "native-load";}
+ bool helpers_registered=true;for(const auto &helper:helper_paths)if(!windows_child_gate::register_helper(helper)){helpers_registered=false;break;}
+ if(!helpers_registered){for(const auto &helper:helper_paths)windows_child_gate::unregister_helper(helper);FreeLibrary(module);log_message("package-helper-registration-failed");return "native-helpers";}
+ modules.push_back(module);auto initialize=(loader_plugin_init_v1_fn)GetProcAddress(module,"loader_plugin_init_v1");
+ current_package=package.manifest.id;int result=initialize?initialize(&api):LOADER_ERR_INVALID;current_package.clear();package.init_result=result;package.resident=true;log_message(result==0?"package-resident-ready":"package-init-failed");
+ if(result!=LOADER_OK)for(const auto &helper:helper_paths)windows_child_gate::unregister_helper(helper);
+ if(result==LOADER_ERR_STORAGE_IO||result==LOADER_ERR_POLICY_INVALID){startup_receipt();log_message("startup-policy-or-storage-failed");TerminateProcess(GetCurrentProcess(),ERROR_DLL_INIT_FAILED);ExitProcess(ERROR_DLL_INIT_FAILED);}
+ return result==LOADER_OK?nullptr:"native-init";
+}
+bool activate(Package &package){
+ if(package.state!="pending")return package.state=="active";
+ if(package.visiting){package.state="failed";package.reason="dependency-cycle";return false;}
+ package.visiting=true;for(const auto &dependency:package.manifest.packages){auto found=packages.find(dependency.first);if(found!=packages.end())activate(*found->second);}package.visiting=false;
+ if(package.state!="pending")return false;
+ if(package.manifest.native){
+  package.reason=package_model::resolve(package.manifest,environment);
+  if(package.reason.empty())try{if(auto failure=load_native(package))package.reason=failure;}catch(const std::exception&){package.reason="invalid";}
+  package.state=package.reason.empty()?"active":"failed";if(package.state=="active")environment.packages[package.manifest.id]=package.manifest.version;
+ }else{settle(package);package_panel(package);}
+ return package.state=="active";
+}
+// Native code stays resident until the host exits, so only declarative packages follow the folder at runtime.
+void scan_packages(std::map<std::string,std::unique_ptr<Package>> &found,json &rejected){
  auto folder=root/L"plugins";if(!regular(folder,true))return;
- std::set<std::string> ids;unsigned count=0;
  for(auto &item:fs::directory_iterator(folder)){
   try{
-   if(count>=32)break;auto package=item.path();auto manifest=package/L"plugin.json";
-   if(!regular(package,true)||!regular(manifest)||fs::file_size(manifest)>65536)continue;
-   std::ifstream stream(manifest);json definition=json::parse(stream,nullptr,false);
-   if(!definition.is_object()||definition.value("schema",0)!=1||!definition.contains("id")||!definition["id"].is_string())continue;
-   auto id=definition["id"].get<std::string>();if(!id_valid(id)||ids.count(id))continue;
-   if(definition.contains("enabled")&&(!definition["enabled"].is_boolean()||!definition["enabled"].get<bool>()))continue;
-   if(!definition.contains("nativeLibraries")||!definition["nativeLibraries"].is_object())continue;
-   auto libraries=definition["nativeLibraries"];auto key=loader_platform_key();if(!libraries.contains(key)||!libraries[key].is_string())continue;
-   std::string relative=libraries[key];if(relative.size()>512||relative.find(':')!=std::string::npos)continue;
-   fs::path path=fs::u8path(relative);if(path.is_absolute()||path.extension()!=L".dll")continue;
-   bool valid=true;auto cursor=package;for(const auto &part:path){if(part==L".."||part==L"."){valid=false;break;}cursor/=part;if(!regular(cursor,cursor!=package/path)){valid=false;break;}}
-   if(!valid)continue;
-   auto absolute=(package/path).lexically_normal();auto base=package.lexically_normal();auto rel=absolute.lexically_relative(base);if(rel.empty()||*rel.begin()==L"..")continue;
-   std::vector<std::wstring> helper_paths;
-   if(definition.contains("nativeHelpers")){
-    if(!definition["nativeHelpers"].is_object())continue;auto helpers=definition["nativeHelpers"].value(key,json::array());if(!helpers.is_array()||helpers.size()>8)continue;bool helper_valid=true;
-    for(const auto &entry:helpers){if(!entry.is_string()){helper_valid=false;break;}auto text=entry.get<std::string>();fs::path helper=fs::u8path(text);if(text.empty()||text.size()>512||text.find(':')!=std::string::npos||helper.is_absolute()||helper.extension()!=L".exe"){helper_valid=false;break;}auto cursor=package;for(const auto &part:helper){if(part==L".."||part==L"."){helper_valid=false;break;}cursor/=part;if(!regular(cursor,cursor!=package/helper)){helper_valid=false;break;}}std::wstring physical;if(!helper_valid||!windows_network::canonical_executable_path((package/helper).wstring(),physical)){helper_valid=false;break;}helper_paths.push_back(std::move(physical));}
-    if(!helper_valid)continue;
-   }
-   auto module=LoadLibraryExW(absolute.c_str(),nullptr,LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR|LOAD_LIBRARY_SEARCH_SYSTEM32);if(!module){package_results.push_back({{"id",id},{"loaded",false}});log_message("package-load-failed");continue;}
-   bool helpers_registered=true;for(const auto &helper:helper_paths)if(!windows_child_gate::register_helper(helper)){helpers_registered=false;break;}if(!helpers_registered){for(const auto &helper:helper_paths)windows_child_gate::unregister_helper(helper);FreeLibrary(module);package_results.push_back({{"id",id},{"loaded",false}});log_message("package-helper-registration-failed");continue;}
-   modules.push_back(module);ids.insert(id);count++;auto initialize=(loader_plugin_init_v1_fn)GetProcAddress(module,"loader_plugin_init_v1");int result=initialize?initialize(&api):LOADER_ERR_INVALID;package_results.push_back({{"id",id},{"loaded",true},{"initResult",result}});log_message(result==0?"package-resident-ready":"package-init-failed");
-   if(result!=LOADER_OK)for(const auto &helper:helper_paths)windows_child_gate::unregister_helper(helper);
-   if(result==LOADER_ERR_STORAGE_IO||result==LOADER_ERR_POLICY_INVALID){startup_receipt();log_message("startup-policy-or-storage-failed");TerminateProcess(GetCurrentProcess(),ERROR_DLL_INIT_FAILED);ExitProcess(ERROR_DLL_INIT_FAILED);}
+   if(found.size()>=32)break;auto directory=item.path();auto file=directory/L"plugin.json";
+   if(!regular(directory,true)||!regular(file)||fs::file_size(file)>65536)continue;
+   std::ifstream stream(file);auto package=std::make_unique<Package>();package->definition=json::parse(stream,nullptr,false);package->folder=directory;
+   auto invalid=package_model::parse(package->definition,package->manifest);
+   if(!invalid.empty()){if(!package->manifest.id.empty())rejected.push_back({{"id",package->manifest.id},{"loaded",false},{"reason","manifest-"+invalid}});continue;}
+   if(!package->manifest.enabled||found.count(package->manifest.id))continue;
+   auto id=package->manifest.id;found.emplace(id,std::move(package));
   }catch(const std::exception&){log_message("package-invalid");}
  }
+}
+json package_receipt(const Package &package){
+ json result{{"id",package.manifest.id},{"kind",package.manifest.native?"native":"declarative"},{"state",package.state},{"loaded",package.manifest.native?package.resident:package.state=="active"}};
+ if(package.resident)result["initResult"]=package.init_result;if(!package.reason.empty())result["reason"]=package.reason;return result;
+}
+void write_package_results(const json &rejected){package_results=rejected;for(auto &entry:packages)package_results.push_back(package_receipt(*entry.second));}
+void load_packages(){
+ environment.capabilities={"mcp.tools","panel","storage"};
+ if(managed&&editor_gate_result==LOADER_OK)environment.capabilities.insert({"editor.read","editor.write","transport.read","transport.control"});
+ if(native_voice&&native_voice->installed)environment.capabilities.insert({"voicebanks.read","voicebanks.select"});
+ if(native_export&&native_export->available)environment.capabilities.insert({"exports.read","exports.write"});
+ json rejected=json::array();scan_packages(packages,rejected);
+ for(auto &entry:packages)activate(*entry.second);
+ write_package_results(rejected);
+}
+void retire(Package &package){
+ package.state="removed";package.reason.clear();settle(package);
+ if(package.panel){native_panel::unregister_ui(package.manifest.id.c_str(),&package);package.panel=false;}
+}
+json reload_packages(){
+ std::map<std::string,std::unique_ptr<Package>> found;json rejected=json::array();scan_packages(found,rejected);
+ for(auto &entry:packages){
+  auto &package=*entry.second;if(package.manifest.native)continue;auto next=found.find(entry.first);
+  if(next==found.end()||next->second->manifest.native){if(package.state!="removed")retire(package);continue;}
+  if(package.state!="removed"&&next->second->definition==package.definition)continue;
+  if(package.state!="removed")retire(package);
+  package.manifest=next->second->manifest;package.definition=next->second->definition;package.folder=next->second->folder;package.grants=json::object();package.last.clear();package.enabled=true;package.state="pending";
+ }
+ for(auto &entry:found)if(!packages.count(entry.first)){if(entry.second->manifest.native)rejected.push_back({{"id",entry.first},{"loaded",false},{"reason","restart-required"}});else packages.emplace(entry.first,std::move(entry.second));}
+ for(auto &entry:packages)activate(*entry.second);
+ // Packages that depend on a changed one are re-evaluated against the new set.
+ for(auto &entry:packages){auto &package=*entry.second;if(package.manifest.native||package.state=="removed")continue;auto before=package.state;settle(package);if(package.panel&&before!=package.state)native_panel::update_ui(entry.first.c_str(),package_state(package).dump().c_str(),&package);}
+ write_package_results(rejected);startup_receipt();return capability_snapshot()["packages"];
 }
 bool token_is_app_container(){HANDLE token=nullptr;if(!OpenProcessToken(GetCurrentProcess(),TOKEN_QUERY,&token))return false;DWORD value=0,size=0;bool result=GetTokenInformation(token,TokenIsAppContainer,&value,sizeof(value),&size)&&size==sizeof(value)&&value!=0;CloseHandle(token);return result;}
 bool flag_enabled(const wchar_t *key){wchar_t value[4]{};return GetEnvironmentVariableW(key,value,4)==1&&value[0]==L'1';}

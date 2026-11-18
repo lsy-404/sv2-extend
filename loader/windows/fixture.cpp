@@ -25,6 +25,15 @@ int wmain(int argc,wchar_t **argv){
  checks["unverifiedReceiptRefused"]=api->verify_host_network_quiescence(state.generation,&state)==LOADER_ERR_NOT_SUPPORTED;
  checks["blockingWithoutControllerRefused"]=api->set_host_network_blocked(1)==LOADER_ERR_PROFILE_BUSY;checks["invalidNetworkPolicyRejected"]=api->set_host_network_blocked(2)==LOADER_ERR_INVALID;
  checks["privateMethodNotPublic"]=api->register_capability_provider("bad.account",[](const char*,const char*,loader_json_completion,void*,void*){},nullptr,"{\"methods\":[\"account.switch\"]}")==LOADER_ERR_INVALID;
+ auto call=[&](const char *method,const char *arguments){response=nullptr;api->request_capability_json(method,arguments,complete,nullptr);return response;};
+ auto package=[&](const char *id){auto snapshot=call("runtime.capabilities","{}");for(auto &entry:snapshot["result"]["packages"])if(entry["id"]==id)return entry;return json::object();};
+ checks["loaderDeclaresCapabilities"]=call("runtime.capabilities","{}")["result"]["loader"]["version"]=="0.10.0";
+ checks["grantedPackageToolCalls"]=call("example.greeter.svext_greeter_greet","{}")["result"]["message"]=="Hello from the resident plugin";
+ checks["ungrantedPackageToolDenied"]=package("example.locked")["state"]=="active"&&call("example.locked.svext_locked_greet","{}")["error"]["code"]=="PERMISSION_DENIED";
+ checks["packageStorageRoundTrip"]=call("example.greeter.svext_greeter_remember","{\"value\":\"kept\"}").value("ok",false)&&call("example.greeter.svext_greeter_recall","{}")["result"]["value"]=="kept";
+ checks["missingCapabilityNotLoaded"]=package("example.editor-reader")["reason"]=="missing-capability:editor.read";
+ std::error_code removal;std::filesystem::remove_all(std::filesystem::path(argv[1]).parent_path()/"smoke-profile"/"plugins"/"example.locked",removal);
+ checks["removedPackageUnloads"]=!removal&&call("runtime.packages.reload","{}").value("ok",false)&&package("example.locked")["state"]=="removed"&&call("example.locked.svext_locked_greet","{}")["error"]["code"]=="METHOD_UNAVAILABLE"&&package("example.greeter")["state"]=="active";
  bool passed=true;for(auto &value:checks)passed=passed&&value.get<bool>();
  std::ofstream report{std::filesystem::path(argv[1])};report<<json{{"passed",passed},{"checks",checks},{"hostPid",GetCurrentProcessId()},{"scope","Real Windows bootstrap and resident shared SDK fixture; not a Windows SV2 acceptance test."}}.dump(2);report.close();
  ULONGLONG deadline=GetTickCount64()+2000;while(GetTickCount64()<deadline){MSG message;while(PeekMessageW(&message,nullptr,0,0,PM_REMOVE)){TranslateMessage(&message);DispatchMessageW(&message);}Sleep(10);}return passed?0:3;

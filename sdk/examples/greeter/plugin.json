@@ -1,0 +1,43 @@
+{
+  "schema": 1,
+  "id": "example.greeter",
+  "name": "Greeter",
+  "version": "1.0.0",
+  "requires": {
+    "loader": ">=0.10",
+    "capabilities": { "mcp.tools": "*", "panel": "*", "storage": "*" },
+    "packages": { "example.hello": ">=1.0" }
+  },
+  "permissions": ["package.example.hello"],
+  "contributes": {
+    "mcpTools": [
+      {
+        "name": "svext_greeter_greet",
+        "description": "Read the greeting provided by the Hello package.",
+        "inputSchema": { "type": "object", "properties": {}, "additionalProperties": false },
+        "call": { "method": "hello.greet" }
+      },
+      {
+        "name": "svext_greeter_remember",
+        "description": "Store a note in this package's own data.",
+        "inputSchema": { "type": "object", "properties": { "value": { "type": "string" } }, "required": ["value"], "additionalProperties": false },
+        "call": { "method": "storage.write", "arguments": { "key": "note" } }
+      },
+      {
+        "name": "svext_greeter_recall",
+        "description": "Read the note stored by this package.",
+        "inputSchema": { "type": "object", "properties": {}, "additionalProperties": false },
+        "call": { "method": "storage.read", "arguments": { "key": "note" } }
+      }
+    ],
+    "panel": {
+      "menu": [
+        {
+          "title": "Hello",
+          "items": [{ "id": "greet", "title": "Read greeting", "call": { "method": "hello.greet" } }]
+        },
+        { "id": "clear", "title": "Clear note", "call": { "method": "storage.write", "arguments": { "key": "note", "value": "" } } }
+      ]
+    }
+  }
+}

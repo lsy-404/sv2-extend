@@ -26,6 +26,12 @@ run('g++',*flags,'-municode',source.parents[1]/'test/windows_namespace_fixture.c
 plugin=out/'smoke-profile/plugins/example.hello/native/windows-x86_64/plugin.dll';plugin.parent.mkdir(parents=True,exist_ok=True)
 run('gcc','-shared','-O2','-Wall','-Wextra','-Werror','-I'+str(source.parents[1]/'sdk/include'),source.parents[1]/'sdk/examples/hello_plugin.c','-o',plugin,'-static-libgcc')
 (plugin.parents[2]/'plugin.json').write_text(json.dumps({'schema':1,'id':'example.hello','name':'Hello','version':'1.0.0','nativeLibraries':{'windows-x86_64':'native/windows-x86_64/plugin.dll'}},indent=2))
+smoke=out/'smoke-profile';greeter=json.loads((source.parents[1]/'sdk/examples/greeter/plugin.json').read_text(encoding='utf-8'))
+locked=json.loads(json.dumps(greeter).replace('greeter','locked'))
+unsupported={'schema':1,'id':'example.editor-reader','name':'Editor reader','version':'1.0.0','requires':{'capabilities':{'editor.read':'*'}},'permissions':['editor.read']}
+for manifest in (greeter,locked,unsupported):
+    folder=smoke/'plugins'/manifest['id'];folder.mkdir(parents=True,exist_ok=True);(folder/'plugin.json').write_text(json.dumps(manifest,indent=2),encoding='utf-8')
+(smoke/'preferences').mkdir(exist_ok=True);(smoke/'preferences/windows-plugin-ui.json').write_text(json.dumps({'schema':1,'plugins':{'example.greeter':{'enabled':True,'grant.package.example.hello':True}}}),encoding='utf-8')
 files=['ExtendCore.dll','ExtendLauncher.exe','ExtendFixture.exe','network-helper.exe']
 imports={name:re.findall(r'DLL Name: (.+)',subprocess.check_output([args.prefix+'objdump','-p',str(out/name)],text=True)) for name in files}
 assert all(dll.lower() in {'kernel32.dll','user32.dll','gdi32.dll','shell32.dll','ole32.dll','oleaut32.dll','userenv.dll','msvcrt.dll','ucrtbase.dll','advapi32.dll','bcrypt.dll','iphlpapi.dll','ws2_32.dll'} or dll.lower().startswith('api-ms-win-') for names in imports.values() for dll in names),imports

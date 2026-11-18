@@ -43,7 +43,7 @@ python loader/windows/build.py --prefix "" --out ./build/windows
 - `plugins/`：MCP、Lua Extend、JavaScript Extend。
 - `docs/`：接口、平台和验证范围。
 
-[版本下载](https://github.com/lsy-404/sv2-extend/releases) · [实现状态](docs/IMPLEMENTATION-STATUS.md) · [插件管理](docs/PLUGIN-MANAGER.md)
+[版本下载](https://github.com/lsy-404/sv2-extend/releases) · [实现状态](docs/IMPLEMENTATION-STATUS.md) · [插件管理](docs/PLUGIN-MANAGER.md) · [声明式扩展包](docs/PACKAGES.md)
 
 ## 许可证
 
