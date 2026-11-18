@@ -12,3 +12,6 @@ See loader/windows/vendor/minhook/LICENSE.txt.
 
 Lua 5.5.1 — MIT License, Copyright (C) 1994-2026 Lua.org, PUC-Rio.
 See loader/packages/vendor/lua/LICENSE.txt.
+
+picohttpparser — MIT License, Copyright (c) 2009-2014 Kazuho Oku, Tokuhiro Matsuno,
+Daisuke Murase, Shigeo Mitsunari. See loader/packages/vendor/picohttpparser/picohttpparser.h.

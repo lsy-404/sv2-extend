@@ -12,6 +12,7 @@
 #include "vendor/json.hpp"
 #include "../packages/package_model.h"
 #include "../packages/package_runtime.h"
+#include "package_network.h"
 #include "../../sdk/include/loader_api.h"
 #include "../../sdk/include/extend_platform.h"
 #include "native_panel.h"
@@ -70,7 +71,7 @@ void category_tick(){
  std::ofstream output(root/L"outputs"/L"windows-category.json",std::ios::binary|std::ios::trunc);if(!output)return;output<<body;output.close();if(output)previous=body;
 }
 struct Provider{loader_editor_dispatch dispatch;void *owner;std::set<std::string> methods;json descriptor;std::string package;};
-struct Package{package_model::Manifest manifest;fs::path folder;json definition,grants=json::object();std::string state="pending",reason,last;bool visiting=false,provider=false,panel=false,enabled=true,resident=false;int init_result=0;std::shared_ptr<package_runtime::Runtime> runtime;};
+struct Package{package_model::Manifest manifest;fs::path folder;json definition,grants=json::object();std::string state="pending",reason,last;bool visiting=false,provider=false,panel=false,enabled=true,resident=false;int init_result=0;std::shared_ptr<package_runtime::Runtime> runtime;std::unique_ptr<package_network::Server> server;unsigned long long server_serial=0;};
 std::map<std::string,std::unique_ptr<Package>> packages;package_model::Environment environment;std::string current_package;json reload_packages();
 std::map<std::string,Provider> providers;
 struct Request{std::string method,arguments,provider;loader_json_completion completion;void *context;ULONGLONG deadline;std::atomic<bool> delivered{false};};
@@ -214,6 +215,22 @@ json storage_call(const Package &package,const std::string &method,const json &a
  if(status!=LOADER_OK)return {{"ok",false},{"error",{{"code",status==LOADER_ERR_INVALID?"INVALID_ARGUMENT":"STORAGE_ERROR"},{"status",status}}}};
  return {{"ok",true},{"result",result}};
 }
+// Runs a task on the main thread, where package state and package code live.
+bool post_main(std::function<void()> task){auto queued=new std::function<void()>(std::move(task));if(PostMessageW(dispatcher,WM_APP+5,0,reinterpret_cast<LPARAM>(queued)))return true;delete queued;return false;}
+json listen_call(Package &package,const json &arguments){
+ auto name=arguments.value("handler",json());auto mode=arguments.value("auth",json("token"));
+ if(!name.is_string()||!mode.is_string()||(mode!="token"&&mode!="none"))return package_network::failure("INVALID_ARGUMENT");
+ if(!package.runtime||!package.runtime->handles(name.get<std::string>()))return package_network::failure("HANDLER_UNAVAILABLE");
+ auto target=&package;auto handler=name.get<std::string>();package.server.reset();
+ // The serial ties a request to the listener that accepted it, so a closed listener's late requests are refused.
+ static unsigned long long serials=0;auto serial=++serials;package.server_serial=serial;
+ package.server=package_network::Server::listen([target,handler,serial](json request,package_network::Done respond){
+  if(!post_main([target,handler,serial,request,respond]{if(target->server_serial!=serial||!target->server||!target->runtime)respond(package_network::failure("PACKAGE_UNLOADED"));else target->runtime->invoke(handler,request,respond);}))respond(package_network::failure("PACKAGE_UNLOADED"));
+ },mode=="token");
+ if(!package.server)return package_network::failure("LISTEN_FAILED");
+ json result{{"port",package.server->port},{"url","http://127.0.0.1:"+std::to_string(package.server->port)}};if(mode=="token")result["token"]=package.server->token();
+ return {{"ok",true},{"result",result}};
+}
 void execute(Package &package,const package_model::Call &call,const json &arguments,loader_json_completion complete,void *context){
  auto finish=[&](const json &value){auto body=value.dump();complete(body.data(),body.size(),context);};
  auto fail=[&](json error){finish({{"ok",false},{"error",std::move(error)}});};
@@ -226,7 +243,12 @@ void execute(Package &package,const package_model::Call &call,const json &argume
  if(call.method=="storage.read"||call.method=="storage.write"){if(!package.manifest.capabilities.count("storage"))fail({{"code","PERMISSION_UNDECLARED"},{"package",package.manifest.id},{"method",call.method}});else finish(storage_call(package,call.method,merged));return;}
  std::string key;if(auto code=permission_key(package,call.method,key)){fail({{"code",code},{"package",package.manifest.id},{"method",call.method}});return;}
  if(!package.grants.value("grant."+key,false)){fail({{"code","PERMISSION_DENIED"},{"package",package.manifest.id},{"permission",key}});return;}
- request(call.method.c_str(),merged.dump().c_str(),forward_reply,new Forward{complete,context});
+ if(call.method=="http.request"){
+  package_network::request(merged,package.manifest.hosts,[complete,context](const json &response){auto body=std::make_shared<std::string>(response.dump(-1,' ',false,json::error_handler_t::replace));if(!post_main([complete,context,body]{complete(body->data(),body->size(),context);})){static const char lost[]="{\"ok\":false,\"error\":{\"code\":\"DISPATCH_UNAVAILABLE\"}}";complete(lost,sizeof lost-1,context);}});return;
+ }
+ if(call.method=="server.listen"){finish(listen_call(package,merged));return;}
+ if(call.method=="server.close"){package.server.reset();finish({{"ok",true},{"result",json::object()}});return;}
+ request(call.method.c_str(),merged.dump(-1,' ',false,json::error_handler_t::replace).c_str(),forward_reply,new Forward{complete,context});
 }
 void package_dispatch(const char *method,const char *arguments,loader_json_completion complete,void *context,void *owner){
  auto &package=*static_cast<Package*>(owner);auto parsed=json::parse(arguments,nullptr,false);
@@ -295,7 +317,7 @@ void settle(Package &package){
   if(!package.provider){package.state="failed";package.reason="provider-registration";}
  }
  if(package.state!="active"&&package.provider){unregister_provider(id.c_str(),&package);package.provider=false;}
- if(package.state!="active")package.runtime.reset();
+ if(package.state!="active"){package.server.reset();package.runtime.reset();}
  if(package.state=="active")environment.packages[id]=package.manifest.version;else environment.packages.erase(id);
 }
 struct MenuCall{Package *package;std::string title;};
@@ -317,6 +339,7 @@ void package_panel(Package &package){
  for(const auto &key:package_model::grantable(package.manifest,environment)){
   auto known=package_model::capability(key);std::string title=known?known->title:"调用扩展包 "+key.substr(8)+" 提供的方法",detail=key;
   if(known){detail.clear();for(auto method:known->methods)detail+=(detail.empty()?"":"、")+std::string(method);}
+  if(key=="http"){detail.clear();for(const auto &host:package.manifest.hosts)detail+=(detail.empty()?"":"、")+host;detail=detail.substr(0,480);}
   fields.push_back({{"key","grant."+key},{"title",title},{"detail",detail},{"section","权限"},{"type","boolean"},{"default",false}});
  }
  auto descriptor=package_state(package);descriptor["id"]=package.manifest.id;descriptor["name"]=package.manifest.name;descriptor["version"]=package.manifest.version;descriptor["settings"]=fields;
@@ -374,7 +397,7 @@ json package_receipt(const Package &package){
 }
 void write_package_results(const json &rejected){package_results=rejected;for(auto &entry:packages)package_results.push_back(package_receipt(*entry.second));}
 void load_packages(){
- environment.capabilities={"mcp.tools","panel","storage","runtime.lua"};
+ environment.capabilities={"mcp.tools","panel","storage","runtime.lua","http","http.server"};
  if(managed&&editor_gate_result==LOADER_OK)environment.capabilities.insert({"editor.read","editor.write","transport.read","transport.control"});
  if(native_voice&&native_voice->installed)environment.capabilities.insert({"voicebanks.read","voicebanks.select"});
  if(native_export&&native_export->available)environment.capabilities.insert({"exports.read","exports.write"});

@@ -47,4 +47,4 @@ python loader/windows/build.py --prefix "" --out ./build/windows
 
 ## 许可证
 
-GPL-3.0-only，见 [LICENSE](LICENSE)。第三方 JSON 组件和 Lua 采用 MIT，MinHook 采用 BSD，声明见 [NOTICE](NOTICE)。
+GPL-3.0-only，见 [LICENSE](LICENSE)。第三方 JSON 组件、Lua 和 picohttpparser 采用 MIT，MinHook 采用 BSD，声明见 [NOTICE](NOTICE)。
