@@ -28,6 +28,10 @@ int wmain(int argc,wchar_t **argv){
  auto call=[&](const char *method,const char *arguments){response=nullptr;api->request_capability_json(method,arguments,complete,nullptr);return response;};
  auto package=[&](const char *id){auto snapshot=call("runtime.capabilities","{}");for(auto &entry:snapshot["result"]["packages"])if(entry["id"]==id)return entry;return json::object();};
  checks["loaderDeclaresCapabilities"]=call("runtime.capabilities","{}")["result"]["loader"]["version"]=="0.10.0";
+ checks["cleanProfileCapability"]=false;
+ auto capabilities=call("runtime.capabilities","{}");
+ for(const auto &capability:capabilities["result"]["loader"]["capabilities"])
+  if(capability["id"]=="profile.clean")checks["cleanProfileCapability"]=capability["supported"]==true&&capability["grantable"]==false&&capability["methods"].empty();
  checks["grantedPackageToolCalls"]=call("example.greeter.svext_greeter_greet","{}")["result"]["message"]=="Hello from the resident plugin";
  checks["ungrantedPackageToolDenied"]=package("example.locked")["state"]=="active"&&call("example.locked.svext_locked_greet","{}")["error"]["code"]=="PERMISSION_DENIED";
  checks["packageStorageRoundTrip"]=call("example.greeter.svext_greeter_remember","{\"value\":\"kept\"}").value("ok",false)&&call("example.greeter.svext_greeter_recall","{}")["result"]["value"]=="kept";

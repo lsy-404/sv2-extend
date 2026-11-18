@@ -20,17 +20,19 @@ static bool full_trust(){Handle token;if(!OpenProcessToken(GetCurrentProcess(),T
 static bool pe64(const fs::path &path){Handle file{CreateFileW(path.c_str(),GENERIC_READ,FILE_SHARE_READ,nullptr,OPEN_EXISTING,FILE_ATTRIBUTE_NORMAL,nullptr)};if(file.h==INVALID_HANDLE_VALUE)return false;Handle map{CreateFileMappingW(file.h,nullptr,PAGE_READONLY,0,0,nullptr)};if(!map.h)return false;auto base=(const BYTE*)MapViewOfFile(map.h,FILE_MAP_READ,0,0,0);if(!base)return false;LARGE_INTEGER size{};GetFileSizeEx(file.h,&size);bool valid=false;if(size.QuadPart>0&&uint64_t(size.QuadPart)>sizeof(IMAGE_DOS_HEADER)){auto dos=(const IMAGE_DOS_HEADER*)base;if(dos->e_magic==IMAGE_DOS_SIGNATURE&&dos->e_lfanew>0&&uint64_t(dos->e_lfanew)+sizeof(IMAGE_NT_HEADERS64)<=uint64_t(size.QuadPart)){auto nt=(const IMAGE_NT_HEADERS64*)(base+dos->e_lfanew);valid=nt->Signature==IMAGE_NT_SIGNATURE&&nt->FileHeader.Machine==IMAGE_FILE_MACHINE_AMD64&&nt->OptionalHeader.Magic==IMAGE_NT_OPTIONAL_HDR64_MAGIC;}}UnmapViewOfFile(base);return valid;}
 int wmain(int argc,wchar_t **argv){
  bool fixture=argc>=4&&std::wstring(argv[1])==L"--fixture";
- bool managed=argc>=4&&(std::wstring(argv[1])==L"--host"||std::wstring(argv[1])==L"--managed-fixture");
+ bool official=argc>=4&&(std::wstring(argv[1])==L"--host"||std::wstring(argv[1])==L"--host-clean");
+ bool clean=argc>=4&&(std::wstring(argv[1])==L"--host-clean"||std::wstring(argv[1])==L"--managed-clean-fixture");
+ bool managed=official||clean||(argc>=4&&std::wstring(argv[1])==L"--managed-fixture");
  if(managed&&!full_trust())return 77;
- if(!fixture&&!managed){std::wcerr<<L"ExtendLauncher --host <official-synthv-studio.exe> <profile-directory>\nExtendLauncher --fixture <test-host.exe> <profile-directory> [host arguments]\n";return 64;}
+ if(!fixture&&!managed){std::wcerr<<L"ExtendLauncher --host|--host-clean <official-synthv-studio.exe> <profile-directory>\nExtendLauncher --fixture <test-host.exe> <profile-directory> [host arguments]\n";return 64;}
  try{
  fs::path host=fs::canonical(argv[2]),profile=fs::weakly_canonical(fs::absolute(argv[3]));if(managed&&(contains_path(host.parent_path(),profile)||contains_path(profile,host.parent_path())))return 78;fs::create_directories(profile);profile=fs::canonical(profile);
  wchar_t module[MAX_PATH*4];DWORD length=GetModuleFileNameW(nullptr,module,DWORD(std::size(module)));if(!length||length>=std::size(module))return 65;
  fs::path core=fs::canonical(fs::path(module).parent_path()/L"ExtendCore.dll");
  auto filename=host.filename().wstring();for(auto &c:filename)c=towlower(c);if(fixture&&(filename.find(L"synthv")!=std::wstring::npos||filename.find(L"synthesizer")!=std::wstring::npos))return 78;
- if(std::wstring(argv[1])==L"--host"&&filename!=L"synthv-studio.exe")return 78;
+ if(official&&filename!=L"synthv-studio.exe")return 78;
  managed_host::State host_state;
- if(managed){auto relative=profile.lexically_relative(host.parent_path());if(!relative.empty()&&*relative.begin()!=L"..")return 78;host_state.prepare(host,profile,core,std::wstring(argv[1])==L"--host");if(std::wstring(argv[1])==L"--host")transient_layout::retire(host_state.data/L"Roaming"/L"Dreamtonics"/L"Synthesizer V Studio 2"/L"settings"/L"settings.xml",profile);host=host_state.host;}
+ if(managed){auto relative=profile.lexically_relative(host.parent_path());if(!relative.empty()&&*relative.begin()!=L"..")return 78;host_state.prepare(host,profile,core,official,clean);if(official&&!clean)transient_layout::retire(host_state.data/L"Roaming"/L"Dreamtonics"/L"Synthesizer V Studio 2"/L"settings"/L"settings.xml",profile);host=host_state.host;}
  if(!pe64(host)||!pe64(core)||core.wstring().size()>16000)return 65;
  windows_network::State startup_network_state;
  if(managed){
@@ -50,6 +52,7 @@ int wmain(int argc,wchar_t **argv){
  HMODULE image=LoadLibraryExW(core.c_str(),nullptr,DONT_RESOLVE_DLL_REFERENCES);if(!image)return 66;
  auto entry=GetProcAddress(image,"ExtendInitialize");uintptr_t rva=(uintptr_t)entry-(uintptr_t)image;FreeLibrary(image);if(!entry||rva>UINT32_MAX)return 66;
  // Environment inherited only by this child; launcher exits after initialization.
+ SetEnvironmentVariableW(L"OPEN_SV2_CLEAN_PROFILE_SUPPORTED",L"1");
  SetEnvironmentVariableW(L"OPEN_SV2_LOADER_DATA_DIR",profile.c_str());SetEnvironmentVariableW(L"OPEN_SV2_WINDOWS_FIXTURE",fixture?L"1":nullptr);SetEnvironmentVariableW(L"OPEN_SV2_WINDOWS_MANAGED",managed?L"1":nullptr);
  SetEnvironmentVariableW(L"OPEN_SV2_NETWORK_BOOTSTRAP_HANDLE",managed?std::to_wstring((uintptr_t)host_state.network_handoff.read_handle()).c_str():nullptr);
  if(managed){SetEnvironmentVariableW(L"OPEN_SV2_HOST_DATA_DIR",host_state.data.c_str());SetEnvironmentVariableW(L"APPDATA",(host_state.data/L"Roaming").c_str());SetEnvironmentVariableW(L"LOCALAPPDATA",(host_state.data/L"Local").c_str());SetEnvironmentVariableW(L"TEMP",(host_state.data/L"Temp").c_str());SetEnvironmentVariableW(L"TMP",(host_state.data/L"Temp").c_str());SetEnvironmentVariableW(L"OPEN_SV2_HOST_JOB_HANDLE",std::to_wstring((uintptr_t)host_state.job_query).c_str());}

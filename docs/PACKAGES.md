@@ -62,6 +62,7 @@
 | `mcp.tools` | 否 | 发布 MCP 工具 |
 | `panel` | 否 | 注册面板与菜单 |
 | `storage` | 否 | `storage.read`、`storage.write`：读写包自己的数据 |
+| `profile.clean` | 否 | Windows 启动器提供干净 profile 启动；没有可调用方法 |
 | `runtime.lua` | 否 | 在隔离的 Lua 5.5 运行时中执行包代码 |
 | `editor.read` | 是 | `selection.read`、`pitch.read_range` |
 | `editor.write` | 是 | `notes.set_pitch`、`notes.add`、`notes.remove`、`groups.create`、`groups.remove`、`pitch.replace_range` |
@@ -73,6 +74,8 @@
 | `exports.write` | 是 | `exports.start`、`exports.cancel` |
 | `http` | 是 | `http.request`：向 `hosts` 中的主机发起请求 |
 | `http.server` | 是 | `server.listen`、`server.close`：在本机回环地址提供 HTTP 服务 |
+
+Windows 的 `ExtendLauncher --host-clean <official-synthv-studio.exe> <profile-directory>` 使用新建或只包含插件目录的 profile，准备官方运行资源并启动受管宿主。它不会迁移当前用户数据，已初始化的 profile 会被拒绝。支持该入口的启动器与 Core 组合会声明 `profile.clean`。
 
 当前加载器实际提供哪些能力由运行环境决定。`runtime.capabilities` 的 `loader` 字段列出加载器版本和每项能力的 `supported` 状态，`packages` 字段列出每个包的状态、原因和权限开关。
 
