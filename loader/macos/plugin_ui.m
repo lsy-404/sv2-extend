@@ -34,6 +34,7 @@ static BOOL fieldValue(NSDictionary *field,id value){
 }
 static BOOL sidebar(id v){
  if(![v isKindOfClass:NSDictionary.class]||!text(v[@"title"],128)||![v[@"rows"] isKindOfClass:NSArray.class]||[v[@"rows"] count]>32)return NO;
+ id before=v[@"rowsBeforeSettings"];if(before&&(![before isKindOfClass:NSNumber.class]||boolean(before)||CFNumberIsFloatType((__bridge CFNumberRef)before)||[before longLongValue]<0||[before unsignedLongLongValue]>[v[@"rows"] count]))return NO;
  NSMutableSet *actions=[NSMutableSet new];
  for(id row in v[@"rows"]){if(![row isKindOfClass:NSDictionary.class]||!text(row[@"text"],512))return NO;
   if([row[@"type"] isEqual:@"label"])continue;

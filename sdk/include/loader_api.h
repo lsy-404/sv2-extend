@@ -110,7 +110,8 @@ typedef struct {
        Generic filesystem namespace only; consumers own all account business. */
     const char *(*host_data_directory)(void);
     /* Append-only plugin UI registry. Descriptor schema1: id/name/version/status,
-       sidebar{title,rows[label|button]}, settings[boolean|choice|integer|text].
+       sidebar{title,rows[label|button],rowsBeforeSettings?}, settings[boolean|choice|integer|text].
+       rowsBeforeSettings is an integer from 0 to the row count; omitted means 0.
        Each registered id owns an independent right-toolbar panel. Extend is
        a separate management category below host Settings, not a Scripts section.
        Hide controls change presentation only, never plugin execution.

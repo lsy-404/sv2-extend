@@ -88,14 +88,12 @@ void Panel::render(){if(!viewport.object||!content.object||rendering)return;rend
  if(!plugin)text(@"此插件已卸载",true);
  else {
  text(plugin[@"sidebar"][@"title"],true);text(plugin[@"status"]);if(!labels.empty())statusLabel=labels.back().get();
+ NSArray *sidebarRows=plugin[@"sidebar"][@"rows"];NSUInteger before=[plugin[@"sidebar"][@"rowsBeforeSettings"] unsignedIntegerValue];auto addRows=[&](NSUInteger start,NSUInteger end){for(NSUInteger i=start;i<end;++i){NSDictionary *row=sidebarRows[i];if([row[@"type"] isEqual:@"button"])action(row[@"text"],@"action",pluginId,row[@"id"],false,false);else text(row[@"text"]);}};addRows(0,before);
  for(NSDictionary *f in plugin[@"settings"])
  if([f[@"key"] isEqual:@"enabled"]&&[f[@"type"] isEqual:@"boolean"])
  action(f[@"title"],@"setting",pluginId,@"enabled",true,[plugin[@"values"][@"enabled"] boolValue]);
  settings(plugin);
- for(NSDictionary *row in plugin[@"sidebar"][@"rows"]){
- if([row[@"type"] isEqual:@"button"])action(row[@"text"],@"action",pluginId,row[@"id"],false,false);
- else text(row[@"text"]);
- }
+ addRows(before,sidebarRows.count);
  }
  }
  else {text(@"插件",true);action(@"显示 Extend 入口",@"entry",nil,nil,true,[snapshot[@"extendEntryVisible"] boolValue]);action(@"检查插件更新",@"check",nil,nil,false,false);action(@"安装新插件…",@"local",nil,nil,false,false);action(@"从链接安装…",@"url",nil,nil,false,false);NSDictionary *manager=snapshot[@"manager"];text(manager[@"status"]?:@"");for(NSDictionary *p in manager[@"pending"]){text([NSString stringWithFormat:@"%@：%@ %@",[p[@"operation"] isEqual:@"remove"]?@"待删除":@"待重启",p[@"name"],p[@"version"]]);if([p[@"operation"] isEqual:@"remove"])action(@"取消删除",@"cancel",p[@"id"],nil,false,false);}for(NSDictionary *u in manager[@"updates"])action([NSString stringWithFormat:@"更新 %@ 至 %@",u[@"name"],u[@"version"]],@"update",u[@"id"],nil,false,false);
