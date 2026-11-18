@@ -9,6 +9,7 @@
 namespace windows_child_gate {
 struct State {bool installed=false,blocked=true;size_t helpers=0;unsigned long long denied=0,generation=0;};
 inline std::recursive_mutex mutex;
+inline std::recursive_mutex shell_mutex;
 inline State current;
 struct insensitive {bool operator()(const std::wstring &a,const std::wstring &b)const{return CompareStringOrdinal(a.c_str(),-1,b.c_str(),-1,TRUE)==CSTR_LESS_THAN;}};
 inline std::set<std::wstring,insensitive> helpers;
@@ -39,13 +40,16 @@ inline BOOL WINAPI on_create(LPCWSTR application,LPWSTR command,LPSECURITY_ATTRI
 }
 inline HINSTANCE WINAPI on_shell(HWND window,LPCWSTR operation,LPCWSTR file,LPCWSTR parameters,LPCWSTR directory,INT show){
  auto route=navigation;if(route&&navigation_url(operation,file,parameters)){int decision=route(file);if(decision==1)return reinterpret_cast<HINSTANCE>(static_cast<INT_PTR>(33));if(decision<0){std::lock_guard<std::recursive_mutex> lock(mutex);++current.denied;SetLastError(ERROR_ACCESS_DENIED);return reinterpret_cast<HINSTANCE>(static_cast<INT_PTR>(SE_ERR_ACCESSDENIED));}}
- std::lock_guard<std::recursive_mutex> lock(mutex);
- if(!current.blocked)return original_shell(window,operation,file,parameters,directory,show);
- ++current.denied;SetLastError(ERROR_ACCESS_DENIED);return reinterpret_cast<HINSTANCE>(static_cast<INT_PTR>(SE_ERR_ACCESSDENIED));
+ std::lock_guard<std::recursive_mutex> shell_lock(shell_mutex);
+ {
+  std::lock_guard<std::recursive_mutex> lock(mutex);
+  if(current.blocked){++current.denied;SetLastError(ERROR_ACCESS_DENIED);return reinterpret_cast<HINSTANCE>(static_cast<INT_PTR>(SE_ERR_ACCESSDENIED));}
+ }
+ return original_shell(window,operation,file,parameters,directory,show);
 }
 inline bool register_helper(const std::wstring &path){std::wstring resolved;if(!physical(path.c_str(),resolved))return false;std::lock_guard<std::recursive_mutex> lock(mutex);try{if(helpers.insert(resolved).second)++current.generation;}catch(...){return false;}return true;}
 inline void unregister_helper(const std::wstring &path){std::lock_guard<std::recursive_mutex> lock(mutex);if(helpers.erase(path))++current.generation;}
-inline void setblocked(bool value){std::lock_guard<std::recursive_mutex> lock(mutex);if(current.blocked!=value){current.blocked=value;++current.generation;}}
+inline void setblocked(bool value){std::lock_guard<std::recursive_mutex> shell_lock(shell_mutex);std::lock_guard<std::recursive_mutex> lock(mutex);if(current.blocked!=value){current.blocked=value;++current.generation;}}
 inline State state(){std::lock_guard<std::recursive_mutex> lock(mutex);State out=current;out.helpers=helpers.size();return out;}
 inline bool install(){
  std::lock_guard<std::recursive_mutex> lock(mutex);if(current.installed)return true;
