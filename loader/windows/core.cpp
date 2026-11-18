@@ -11,6 +11,7 @@
 #include <atomic>
 #include "vendor/json.hpp"
 #include "../packages/package_model.h"
+#include "../packages/package_runtime.h"
 #include "../../sdk/include/loader_api.h"
 #include "../../sdk/include/extend_platform.h"
 #include "native_panel.h"
@@ -69,7 +70,7 @@ void category_tick(){
  std::ofstream output(root/L"outputs"/L"windows-category.json",std::ios::binary|std::ios::trunc);if(!output)return;output<<body;output.close();if(output)previous=body;
 }
 struct Provider{loader_editor_dispatch dispatch;void *owner;std::set<std::string> methods;json descriptor;std::string package;};
-struct Package{package_model::Manifest manifest;fs::path folder;json definition,grants=json::object();std::string state="pending",reason,last;bool visiting=false,provider=false,panel=false,enabled=true,resident=false;int init_result=0;};
+struct Package{package_model::Manifest manifest;fs::path folder;json definition,grants=json::object();std::string state="pending",reason,last;bool visiting=false,provider=false,panel=false,enabled=true,resident=false;int init_result=0;std::shared_ptr<package_runtime::Runtime> runtime;};
 std::map<std::string,std::unique_ptr<Package>> packages;package_model::Environment environment;std::string current_package;json reload_packages();
 std::map<std::string,Provider> providers;
 struct Request{std::string method,arguments,provider;loader_json_completion completion;void *context;ULONGLONG deadline;std::atomic<bool> delivered{false};};
@@ -131,7 +132,7 @@ void namespace_receipt(){
  std::ofstream output(root/L"outputs"/L"windows-namespace.json",std::ios::binary|std::ios::trunc);if(!output)return;output<<json{{"mode","shell-entry-detours"},{"hostPid",GetCurrentProcessId()},{"redirectedQueries",data_namespace::redirected.load()},{"otherQueries",data_namespace::other.load()},{"lastOtherCSIDL",data_namespace::last_csidl.load()},{"lastOtherKnownId",data_namespace::last_known.load()}}.dump(2);output.close();if(output)previous=count;
 }
 void editor_receipt(){if(!managed)return;static unsigned attempts=0;static ULONGLONG attempted_at=0;auto now=GetTickCount64();auto state=editor_autostart::status();if(editor_start_result==LOADER_OK&&!state.scan_seen&&editor_autostart::root_ready()&&attempts<20&&now-attempted_at>=500){attempted_at=now;attempts++;editor_autostart::request_initial_scan();state=editor_autostart::status();}json value{{"hostPid",GetCurrentProcessId()},{"getenvGateResult",editor_gate_result},{"autostartResult",editor_start_result},{"installed",state.installed},{"scanSeen",state.scan_seen},{"runRequested",state.run_requested},{"scanAttempts",attempts},{"initialScanReason",state.initial_scan_reason},{"editorReady",editor_online()}};static std::string previous;auto body=value.dump(2);if(body==previous)return;std::ofstream output(root/L"outputs"/L"windows-editor.json",std::ios::binary|std::ios::trunc);if(!output)return;output<<body;output.close();if(output)previous=body;}
-LRESULT CALLBACK window_proc(HWND window,UINT message,WPARAM w,LPARAM l){if(message==windows_host_navigation::message)return windows_host_navigation::receive(l);if(message==WM_APP+4){network_tick();return 0;}if(message==WM_APP+2){native_panel::drain();return 0;}if(message==WM_APP+1){dispatch_request((Request*)l);return 0;}if(message==WM_TIMER){network_tick();native_panel::drain();if(native_voice)native_voice->tick();if(native_export)native_export->tick();if(editor_service)editor_service->tick();std::vector<Request*> expired;{std::lock_guard<std::mutex> guard(requests_mutex);for(auto &r:requests)if(!r->delivered&&GetTickCount64()>=r->deadline)expired.push_back(r.get());}for(auto r:expired)error(r,"TIMEOUT");category_tick();namespace_receipt();editor_receipt();return 0;}return DefWindowProcW(window,message,w,l);}
+LRESULT CALLBACK window_proc(HWND window,UINT message,WPARAM w,LPARAM l){if(message==windows_host_navigation::message)return windows_host_navigation::receive(l);if(message==WM_APP+4){network_tick();return 0;}if(message==WM_APP+2){native_panel::drain();return 0;}if(message==WM_APP+1){dispatch_request((Request*)l);return 0;}if(message==WM_APP+5){std::unique_ptr<std::function<void()>> task(reinterpret_cast<std::function<void()>*>(l));(*task)();return 0;}if(message==WM_TIMER){network_tick();native_panel::drain();if(native_voice)native_voice->tick();if(native_export)native_export->tick();if(editor_service)editor_service->tick();std::vector<Request*> expired;{std::lock_guard<std::mutex> guard(requests_mutex);for(auto &r:requests)if(!r->delivered&&GetTickCount64()>=r->deadline)expired.push_back(r.get());}for(auto r:expired)error(r,"TIMEOUT");category_tick();namespace_receipt();editor_receipt();return 0;}return DefWindowProcW(window,message,w,l);}
 void network_tick(){
  if(managed&&!network_initialization_attempted&&editor_autostart::root_ready()){
   network_initialization_attempted=true;
@@ -196,8 +197,9 @@ void startup_receipt();
 struct Forward{loader_json_completion complete;void *context;};
 void forward_reply(const char *body,size_t length,void *context){auto forward=static_cast<Forward*>(context);forward->complete(body,length,forward->context);delete forward;}
 const char *permission_key(const Package &package,const std::string &target,std::string &key){
- if(auto known=package_model::capability_for_method(target)){if(!environment.capabilities.count(known->id))return "CAPABILITY_UNSUPPORTED";key=known->id;return nullptr;}
- for(const auto &pair:providers)if(pair.second.methods.count(target)){auto owner=packages.find(pair.second.package);if(owner==packages.end()||!owner->second->manifest.native)return "TARGET_NOT_ALLOWED";key="package."+owner->first;return package.manifest.permits(key)?nullptr:"PERMISSION_UNDECLARED";}
+ if(auto known=package_model::capability_for_method(target)){if(!package.manifest.permits(known->id))return "PERMISSION_UNDECLARED";if(!environment.capabilities.count(known->id))return "CAPABILITY_UNSUPPORTED";key=known->id;return nullptr;}
+ // Dependencies form an acyclic graph, so a call into a required package cannot come back to its caller.
+ for(const auto &pair:providers)if(pair.second.methods.count(target)){auto owner=packages.find(pair.second.package);if(owner==packages.end()||owner->second.get()==&package||!package.manifest.packages.count(owner->first))return "TARGET_NOT_ALLOWED";key="package."+owner->first;return package.manifest.permits(key)?nullptr:"PERMISSION_UNDECLARED";}
  return "METHOD_UNAVAILABLE";
 }
 json storage_call(const Package &package,const std::string &method,const json &arguments){
@@ -217,7 +219,11 @@ void execute(Package &package,const package_model::Call &call,const json &argume
  auto fail=[&](json error){finish({{"ok",false},{"error",std::move(error)}});};
  if(package.state!="active"){fail({{"code","PACKAGE_UNLOADED"},{"package",package.manifest.id}});return;}
  auto merged=arguments;for(auto item=call.arguments.begin();item!=call.arguments.end();++item)merged[item.key()]=item.value();
- if(call.method=="storage.read"||call.method=="storage.write"){finish(storage_call(package,call.method,merged));return;}
+ if(!call.handler.empty()){
+  if(!package.runtime){fail({{"code","RUNTIME_UNAVAILABLE"},{"package",package.manifest.id}});return;}
+  package.runtime->invoke(call.handler,merged,[complete,context](const json &response){auto body=response.dump(-1,' ',false,json::error_handler_t::replace);complete(body.data(),body.size(),context);});return;
+ }
+ if(call.method=="storage.read"||call.method=="storage.write"){if(!package.manifest.capabilities.count("storage"))fail({{"code","PERMISSION_UNDECLARED"},{"package",package.manifest.id},{"method",call.method}});else finish(storage_call(package,call.method,merged));return;}
  std::string key;if(auto code=permission_key(package,call.method,key)){fail({{"code",code},{"package",package.manifest.id},{"method",call.method}});return;}
  if(!package.grants.value("grant."+key,false)){fail({{"code","PERMISSION_DENIED"},{"package",package.manifest.id},{"permission",key}});return;}
  request(call.method.c_str(),merged.dump().c_str(),forward_reply,new Forward{complete,context});
@@ -225,6 +231,7 @@ void execute(Package &package,const package_model::Call &call,const json &argume
 void package_dispatch(const char *method,const char *arguments,loader_json_completion complete,void *context,void *owner){
  auto &package=*static_cast<Package*>(owner);auto parsed=json::parse(arguments,nullptr,false);
  for(const auto &tool:package.manifest.tools)if(tool.method==method&&parsed.is_object()){execute(package,tool.call,parsed,complete,context);return;}
+ for(const auto &name:package.manifest.methods)if(package.manifest.id+"."+name==method&&parsed.is_object()){package_model::Call call;call.handler=name;execute(package,call,parsed,complete,context);return;}
  auto body=json{{"ok",false},{"error",{{"code","METHOD_UNAVAILABLE"}}}}.dump();complete(body.data(),body.size(),context);
 }
 std::string package_reason(const Package &package){
@@ -232,6 +239,8 @@ std::string package_reason(const Package &package){
  if(reason=="loader-version")return "需要加载器版本 "+package.manifest.loader+"，当前为 "+package_model::loader_version;
  if(reason.rfind("missing-capability:",0)==0)return "当前加载器不提供能力 "+detail;
  if(reason.rfind("missing-package:",0)==0)return "缺少依赖的扩展包 "+detail;
+ if(reason.rfind("runtime-handler:",0)==0)return "扩展包代码没有提供处理函数 "+detail;
+ if(reason=="runtime-load")return "扩展包代码加载失败";
  return "扩展包无法加载（"+reason+"）";
 }
 json package_state(const Package &package){
@@ -247,19 +256,46 @@ json package_state(const Package &package){
  }
  return {{"status",status},{"sidebar",{{"title",package.manifest.name},{"rows",rows}}}};
 }
-// Recomputes a declarative package's state and brings its provider in line.
+bool regular(const fs::path &path,bool directory);
+bool path_inside(const fs::path &package,const std::string &relative,const wchar_t *extension,fs::path &absolute){
+ if(relative.empty()||relative.size()>512||relative.find(':')!=std::string::npos)return false;fs::path path=fs::u8path(relative);if(path.is_absolute()||path.extension()!=extension)return false;
+ auto cursor=package;for(const auto &part:path){if(part==L".."||part==L".")return false;cursor/=part;if(!regular(cursor,cursor!=package/path))return false;}
+ absolute=(package/path).lexically_normal();auto rel=absolute.lexically_relative(package.lexically_normal());return !rel.empty()&&*rel.begin()!=L"..";
+}
+// Completions may arrive on a provider's thread; package code only ever runs on the main thread.
+void runtime_reply(const char *body,size_t length,void *context){
+ auto done=static_cast<package_runtime::Done*>(context);auto response=std::make_shared<json>(body?json::parse(body,body+length,nullptr,false):json());
+ auto deliver=new std::function<void()>([done,response]{(*done)(*response);delete done;});
+ if(on_main()){(*deliver)();delete deliver;}else if(!PostMessageW(dispatcher,WM_APP+5,0,reinterpret_cast<LPARAM>(deliver))){delete deliver;delete done;}
+}
+std::string start_runtime(Package &package){
+ fs::path file;if(!path_inside(package.folder,package.manifest.main,L".lua",file)||fs::file_size(file)>package_runtime::source_limit)return "runtime-source";
+ std::ifstream stream(file,std::ios::binary);std::string source((std::istreambuf_iterator<char>(stream)),std::istreambuf_iterator<char>());if(!stream&&!stream.eof())return "runtime-source";
+ auto target=&package;package_runtime::Host host;
+ host.request=[target](const std::string &method,const json &arguments,package_runtime::Done done){package_model::Call call;call.method=method;execute(*target,call,arguments,runtime_reply,new package_runtime::Done(std::move(done)));};
+ host.log=[target](const std::string &text){log_message(("package "+target->manifest.id+": "+text).c_str());};
+ std::string error;package.runtime=package_runtime::Runtime::create(std::move(host),package.manifest.id,package.manifest.version,source,error);
+ if(!package.runtime){for(auto &character:error)if(character<32||character>126)character=' ';package.last=error.substr(0,400);log_message(("package "+package.manifest.id+": "+error).c_str());return "runtime-load";}
+ for(const auto &name:package.manifest.methods)if(!package.runtime->handles(name))return "runtime-handler:"+name;
+ for(const auto &tool:package.manifest.tools)if(!tool.call.handler.empty()&&!package.runtime->handles(tool.call.handler))return "runtime-handler:"+tool.call.handler;
+ for(const auto &item:package.manifest.menu)if(!item.group&&!item.call.handler.empty()&&!package.runtime->handles(item.call.handler))return "runtime-handler:"+item.call.handler;
+ return "";
+}
+// Recomputes a declarative package's state and brings its runtime and provider in line.
 void settle(Package &package){
  if(package.state!="removed"){
   if(!package.enabled){package.state="disabled";package.reason.clear();}
   else{package.reason=package_model::resolve(package.manifest,environment);package.state=package.reason.empty()?"active":"failed";}
  }
  const auto &id=package.manifest.id;
- if(package.state=="active"&&!package.provider&&!package.manifest.tools.empty()){
-  json methods=json::array(),tools=json::array();for(const auto &tool:package.manifest.tools){methods.push_back(tool.method);tools.push_back({{"name",tool.name},{"method",tool.method},{"description",tool.description},{"inputSchema",tool.inputSchema}});}
+ if(package.state=="active"&&!package.runtime&&!package.manifest.main.empty()){try{package.reason=start_runtime(package);}catch(const std::exception&){package.reason="runtime-source";}if(!package.reason.empty())package.state="failed";}
+ if(package.state=="active"&&!package.provider&&(!package.manifest.tools.empty()||!package.manifest.methods.empty())){
+  json methods=json::array(),tools=json::array();for(const auto &name:package.manifest.methods)methods.push_back(id+"."+name);for(const auto &tool:package.manifest.tools){methods.push_back(tool.method);tools.push_back({{"name",tool.name},{"method",tool.method},{"description",tool.description},{"inputSchema",tool.inputSchema}});}
   current_package=id;package.provider=register_provider(id.c_str(),package_dispatch,&package,json{{"methods",methods},{"tools",tools}}.dump().c_str())==LOADER_OK;current_package.clear();
   if(!package.provider){package.state="failed";package.reason="provider-registration";}
  }
  if(package.state!="active"&&package.provider){unregister_provider(id.c_str(),&package);package.provider=false;}
+ if(package.state!="active")package.runtime.reset();
  if(package.state=="active")environment.packages[id]=package.manifest.version;else environment.packages.erase(id);
 }
 struct MenuCall{Package *package;std::string title;};
@@ -285,11 +321,6 @@ void package_panel(Package &package){
  }
  auto descriptor=package_state(package);descriptor["id"]=package.manifest.id;descriptor["name"]=package.manifest.name;descriptor["version"]=package.manifest.version;descriptor["settings"]=fields;
  package.panel=true;if(native_panel::register_ui(descriptor.dump().c_str(),package_changed,&package)!=LOADER_OK){package.panel=false;log_message("package-panel-unavailable");}
-}
-bool path_inside(const fs::path &package,const std::string &relative,const wchar_t *extension,fs::path &absolute){
- if(relative.empty()||relative.size()>512||relative.find(':')!=std::string::npos)return false;fs::path path=fs::u8path(relative);if(path.is_absolute()||path.extension()!=extension)return false;
- auto cursor=package;for(const auto &part:path){if(part==L".."||part==L".")return false;cursor/=part;if(!regular(cursor,cursor!=package/path))return false;}
- absolute=(package/path).lexically_normal();auto rel=absolute.lexically_relative(package.lexically_normal());return !rel.empty()&&*rel.begin()!=L"..";
 }
 void startup_receipt();
 const char *load_native(Package &package){
@@ -344,7 +375,7 @@ json package_receipt(const Package &package){
 void write_package_results(const json &rejected){package_results=rejected;for(auto &entry:packages)package_results.push_back(package_receipt(*entry.second));}
 bool flag_enabled(const wchar_t *key);
 void load_packages(){
- environment.capabilities={"mcp.tools","panel","storage"};
+ environment.capabilities={"mcp.tools","panel","storage","runtime.lua"};
  if(flag_enabled(L"OPEN_SV2_CLEAN_PROFILE_SUPPORTED"))environment.capabilities.insert("profile.clean");
  if(managed&&editor_gate_result==LOADER_OK)environment.capabilities.insert({"editor.read","editor.write","transport.read","transport.control"});
  if(native_voice&&native_voice->installed)environment.capabilities.insert({"voicebanks.read","voicebanks.select"});

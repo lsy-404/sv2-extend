@@ -16,7 +16,10 @@ flags=['-std=c++17','-D_WIN32_WINNT=0x0602','-O2','-Wall','-Wextra','-Werror','-
 hook_objects=[]
 for relative in ['buffer.c','hook.c','trampoline.c','hde/hde64.c']:
     obj=out/('minhook-'+Path(relative).stem+'.o');run('gcc','-O2','-c',source/'vendor/minhook/src'/relative,'-o',obj);hook_objects.append(obj)
-run('g++',*flags,'-shared',source/'core.cpp',source/'editor_gate.cpp',source/'editor_autostart.cpp',source/'javascript_gate.cpp',source/'voice_adapter.cpp',*hook_objects,'-o',out/'ExtendCore.dll','-luser32','-lgdi32','-ladvapi32','-lshell32','-lole32','-loleaut32','-liphlpapi','-lws2_32','-luuid','-lbcrypt','-Wl,--dynamicbase,--nxcompat')
+lua_objects=[]
+for unit in sorted((source.parent/'packages/vendor/lua').glob('*.c')):
+    obj=out/('lua-'+unit.stem+'.o');run('g++','-x','c++','-std=c++17','-O2','-c',unit,'-o',obj);lua_objects.append(obj)
+run('g++',*flags,'-shared',source/'core.cpp',source/'editor_gate.cpp',source/'editor_autostart.cpp',source/'javascript_gate.cpp',source/'voice_adapter.cpp',*hook_objects,*lua_objects,'-o',out/'ExtendCore.dll','-luser32','-lgdi32','-ladvapi32','-lshell32','-lole32','-loleaut32','-liphlpapi','-lws2_32','-luuid','-lbcrypt','-Wl,--dynamicbase,--nxcompat')
 run('windres','-I',source,'-i',source/'launcher.rc','-o',out/'launcher-resource.o')
 run('g++',*flags,'-municode',source/'launcher.cpp',out/'launcher-resource.o','-o',out/'ExtendLauncher.exe','-ladvapi32','-lshell32','-lole32','-loleaut32','-luuid','-lbcrypt','-Wl,--dynamicbase,--nxcompat')
 run('g++',*flags,'-municode',source/'network_helper.cpp','-o',out/'network-helper.exe','-lshell32','-lole32','-loleaut32','-luuid','-Wl,--dynamicbase,--nxcompat')
@@ -29,15 +32,18 @@ run('gcc','-shared','-O2','-Wall','-Wextra','-Werror','-I'+str(source.parents[1]
 smoke=out/'smoke-profile';greeter=json.loads((source.parents[1]/'sdk/examples/greeter/plugin.json').read_text(encoding='utf-8'))
 locked=json.loads(json.dumps(greeter).replace('greeter','locked'))
 unsupported={'schema':1,'id':'example.editor-reader','name':'Editor reader','version':'1.0.0','requires':{'capabilities':{'editor.read':'*'}},'permissions':['editor.read']}
-for manifest in (greeter,locked,unsupported):
+runaway={'schema':1,'id':'example.runaway','name':'Runaway','version':'1.0.0','requires':{'capabilities':{'runtime.lua':'*'}},'main':'main.lua','contributes':{'methods':['spin','hoard','reach']}}
+for manifest in (greeter,locked,unsupported,runaway):
     folder=smoke/'plugins'/manifest['id'];folder.mkdir(parents=True,exist_ok=True);(folder/'plugin.json').write_text(json.dumps(manifest,indent=2),encoding='utf-8')
-(smoke/'preferences').mkdir(exist_ok=True);(smoke/'preferences/windows-plugin-ui.json').write_text(json.dumps({'schema':1,'plugins':{'example.greeter':{'enabled':True,'grant.package.example.hello':True}}}),encoding='utf-8')
+(smoke/'plugins/example.runaway/main.lua').write_text("return {spin=function() while true do pcall(function() while true do end end) end end,hoard=function() local kept={} while true do kept[#kept+1]=string.rep('x',1048576)..#kept end end,reach=function(_,reply) reply({os=type(os),io=type(io),load=type(load),require=type(require),debug=type(debug)}) end}\n",encoding='utf-8')
+shutil.copytree(source.parents[1]/'sdk/examples/counter',smoke/'plugins/example.counter',dirs_exist_ok=True)
+(smoke/'preferences').mkdir(exist_ok=True);(smoke/'preferences/windows-plugin-ui.json').write_text(json.dumps({'schema':1,'plugins':{'example.greeter':{'enabled':True,'grant.package.example.hello':True,'grant.package.example.counter':True}}}),encoding='utf-8')
 files=['ExtendCore.dll','ExtendLauncher.exe','ExtendFixture.exe','network-helper.exe']
 imports={name:re.findall(r'DLL Name: (.+)',subprocess.check_output([args.prefix+'objdump','-p',str(out/name)],text=True)) for name in files}
 assert all(dll.lower() in {'kernel32.dll','user32.dll','gdi32.dll','shell32.dll','ole32.dll','oleaut32.dll','userenv.dll','msvcrt.dll','ucrtbase.dll','advapi32.dll','bcrypt.dll','iphlpapi.dll','ws2_32.dll'} or dll.lower().startswith('api-ms-win-') for names in imports.values() for dll in names),imports
 report={'platform':'windows-x86_64','crossCompiled':os.name!='nt','runtimeVerified':False,'apcRelocationFree':True,'systemDLLsOnly':True,'imports':imports,'files':{name:hashlib.sha256((out/name).read_bytes()).hexdigest() for name in files},'scope':'Windows resident Core and managed-host build. Installed host, editor, audio and network behavior are verified separately from compilation.'}
 (out/'build-results.json').write_text(json.dumps(report,indent=2));print(json.dumps(report,indent=2))
-(out/'THIRD-PARTY-NOTICES.txt').write_text((source.parents[1]/'NOTICE').read_text(encoding='utf-8')+'\n'+(source/'vendor/minhook/LICENSE.txt').read_text(encoding='utf-8')+'\n'+(source/'vendor/JSON-LICENSE.MIT').read_text(encoding='utf-8'),encoding='utf-8')
+(out/'THIRD-PARTY-NOTICES.txt').write_text((source.parents[1]/'NOTICE').read_text(encoding='utf-8')+'\n'+(source/'vendor/minhook/LICENSE.txt').read_text(encoding='utf-8')+'\n'+(source/'vendor/JSON-LICENSE.MIT').read_text(encoding='utf-8')+'\n'+(source.parent/'packages/vendor/lua/LICENSE.txt').read_text(encoding='utf-8'),encoding='utf-8')
 resources=out/'EditorLua';resources.mkdir(exist_ok=True)
 for name in ['sv2_extend.lua','sv2_extend_json.lua','editor_provider.lua','windows_runtime.lua']:
     shutil.copyfile(source.parents[1]/'plugins/lua-extend/lua'/name,resources/name)

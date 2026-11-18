@@ -36,8 +36,15 @@ int wmain(int argc,wchar_t **argv){
  checks["ungrantedPackageToolDenied"]=package("example.locked")["state"]=="active"&&call("example.locked.svext_locked_greet","{}")["error"]["code"]=="PERMISSION_DENIED";
  checks["packageStorageRoundTrip"]=call("example.greeter.svext_greeter_remember","{\"value\":\"kept\"}").value("ok",false)&&call("example.greeter.svext_greeter_recall","{}")["result"]["value"]=="kept";
  checks["missingCapabilityNotLoaded"]=package("example.editor-reader")["reason"]=="missing-capability:editor.read";
- std::error_code removal;std::filesystem::remove_all(std::filesystem::path(argv[1]).parent_path()/"smoke-profile"/"plugins"/"example.locked",removal);
- checks["removedPackageUnloads"]=!removal&&call("runtime.packages.reload","{}").value("ok",false)&&package("example.locked")["state"]=="removed"&&call("example.locked.svext_locked_greet","{}")["error"]["code"]=="METHOD_UNAVAILABLE"&&package("example.greeter")["state"]=="active";
+ auto first=call("example.counter.increment","{\"by\":2}"),second=call("example.counter.svext_counter_increment","{\"by\":2}");
+ checks["packageCodeHandlesCalls"]=first.value("ok",false)&&second["result"]["count"]==first["result"]["count"].get<long long>()+2;
+ checks["dependencyCodeRunsForDependent"]=call("example.greeter.svext_greeter_count","{}")["result"]["count"]==second["result"]["count"].get<long long>()+1&&call("example.locked.svext_locked_count","{}")["error"]["code"]=="PERMISSION_DENIED";
+ checks["runawayCodeStopped"]=call("example.runaway.spin","{}")["error"]["code"]=="HANDLER_FAILED"&&call("example.runaway.hoard","{}")["error"]["code"]=="HANDLER_FAILED";
+ auto reach=call("example.runaway.reach","{}")["result"];checks["packageCodeIsolated"]=reach["os"]=="nil"&&reach["io"]=="nil"&&reach["load"]=="nil"&&reach["require"]=="nil"&&reach["debug"]=="nil";
+ auto plugins=std::filesystem::path(argv[1]).parent_path()/"smoke-profile"/"plugins";std::error_code moved;std::filesystem::rename(plugins/"example.locked",plugins.parent_path()/"example.locked.parked",moved);
+ checks["removedPackageUnloads"]=!moved&&call("runtime.packages.reload","{}").value("ok",false)&&package("example.locked")["state"]=="removed"&&call("example.locked.svext_locked_greet","{}")["error"]["code"]=="METHOD_UNAVAILABLE"&&package("example.greeter")["state"]=="active";
+ std::filesystem::rename(plugins.parent_path()/"example.locked.parked",plugins/"example.locked",moved);
+ checks["restoredPackageLoads"]=!moved&&call("runtime.packages.reload","{}").value("ok",false)&&package("example.locked")["state"]=="active"&&call("example.locked.svext_locked_greet","{}")["error"]["code"]=="PERMISSION_DENIED";
  bool passed=true;for(auto &value:checks)passed=passed&&value.get<bool>();
  std::ofstream report{std::filesystem::path(argv[1])};report<<json{{"passed",passed},{"checks",checks},{"hostPid",GetCurrentProcessId()},{"scope","Real Windows bootstrap and resident shared SDK fixture; not a Windows SV2 acceptance test."}}.dump(2);report.close();
  ULONGLONG deadline=GetTickCount64()+2000;while(GetTickCount64()<deadline){MSG message;while(PeekMessageW(&message,nullptr,0,0,PM_REMOVE)){TranslateMessage(&message);DispatchMessageW(&message);}Sleep(10);}return passed?0:3;
