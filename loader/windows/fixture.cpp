@@ -46,7 +46,7 @@ int wmain(int argc,wchar_t **argv){
  auto echoed=wait("example.echo.fetch",{{"url",url},{"method","POST"},{"headers",bearer},{"body","kept"}})["result"];
  checks["packageServesAndRequestsHttp"]=echoed["status"]==200&&echoed["body"]=="POST /notes kept"&&echoed["headers"]["content-type"]=="text/plain; charset=utf-8";
  checks["packageServerRequiresToken"]=wait("example.echo.fetch",{{"url",url}})["result"]["status"]==401;
- checks["undeclaredHostRefused"]=wait("example.echo.fetch",{{"url","https://example.com/"}})["error"]["code"]=="HOST_NOT_DECLARED"&&wait("example.echo.fetch",{{"url","http://127.0.0.1.example.com/"}})["error"]["code"]=="INSECURE_URL";
+ checks["plainHttpRefusedOffLoopback"]=wait("example.echo.fetch",{{"url","http://127.0.0.1.example.com/"}})["error"]["code"]=="INSECURE_URL";
  checks["closedPackageServerStops"]=wait("example.echo.stop",json::object()).value("ok",false)&&wait("example.echo.fetch",{{"url",url},{"headers",bearer}})["error"]["code"]=="HTTP_FAILED";
  auto plugins=std::filesystem::path(argv[1]).parent_path()/"smoke-profile"/"plugins";std::error_code moved;std::filesystem::rename(plugins/"example.locked",plugins.parent_path()/"example.locked.parked",moved);
  checks["removedPackageUnloads"]=!moved&&call("runtime.packages.reload","{}").value("ok",false)&&package("example.locked")["state"]=="removed"&&call("example.locked.svext_locked_greet","{}")["error"]["code"]=="METHOD_UNAVAILABLE"&&package("example.greeter")["state"]=="active";

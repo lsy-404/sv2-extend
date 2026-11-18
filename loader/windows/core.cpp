@@ -244,7 +244,7 @@ void execute(Package &package,const package_model::Call &call,const json &argume
  std::string key;if(auto code=permission_key(package,call.method,key)){fail({{"code",code},{"package",package.manifest.id},{"method",call.method}});return;}
  if(!package.grants.value("grant."+key,false)){fail({{"code","PERMISSION_DENIED"},{"package",package.manifest.id},{"permission",key}});return;}
  if(call.method=="http.request"){
-  package_network::request(merged,package.manifest.hosts,[complete,context](const json &response){auto body=std::make_shared<std::string>(response.dump(-1,' ',false,json::error_handler_t::replace));if(!post_main([complete,context,body]{complete(body->data(),body->size(),context);})){static const char lost[]="{\"ok\":false,\"error\":{\"code\":\"DISPATCH_UNAVAILABLE\"}}";complete(lost,sizeof lost-1,context);}});return;
+  package_network::request(merged,[complete,context](const json &response){auto body=std::make_shared<std::string>(response.dump(-1,' ',false,json::error_handler_t::replace));if(!post_main([complete,context,body]{complete(body->data(),body->size(),context);})){static const char lost[]="{\"ok\":false,\"error\":{\"code\":\"DISPATCH_UNAVAILABLE\"}}";complete(lost,sizeof lost-1,context);}});return;
  }
  if(call.method=="server.listen"){finish(listen_call(package,merged));return;}
  if(call.method=="server.close"){package.server.reset();finish({{"ok",true},{"result",json::object()}});return;}
@@ -339,7 +339,6 @@ void package_panel(Package &package){
  for(const auto &key:package_model::grantable(package.manifest,environment)){
   auto known=package_model::capability(key);std::string title=known?known->title:"调用扩展包 "+key.substr(8)+" 提供的方法",detail=key;
   if(known){detail.clear();for(auto method:known->methods)detail+=(detail.empty()?"":"、")+std::string(method);}
-  if(key=="http"){detail.clear();for(const auto &host:package.manifest.hosts)detail+=(detail.empty()?"":"、")+host;detail=detail.substr(0,480);}
   fields.push_back({{"key","grant."+key},{"title",title},{"detail",detail},{"section","权限"},{"type","boolean"},{"default",false}});
  }
  auto descriptor=package_state(package);descriptor["id"]=package.manifest.id;descriptor["name"]=package.manifest.name;descriptor["version"]=package.manifest.version;descriptor["settings"]=fields;

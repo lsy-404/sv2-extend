@@ -57,7 +57,7 @@ inline const std::vector<Capability> &catalog(){
   {"voicebanks.select","1",true,"切换声库",{"voicebanks.select"}},
   {"exports.read","1",true,"读取导出状态",{"exports.snapshot","exports.status"}},
   {"exports.write","1",true,"开始与取消导出",{"exports.start","exports.cancel"}},
-  {"http","1",true,"向清单列出的主机发起请求",{"http.request"}},
+  {"http","1",true,"发起 HTTPS 请求",{"http.request"}},
   {"http.server","1",true,"在本机回环地址提供 HTTP 服务",{"server.listen","server.close"}}};
  return entries;
 }
@@ -75,7 +75,7 @@ struct Tool{std::string name,method;json description,inputSchema;Call call;};
 struct MenuItem{std::string id,title;bool group=false;Call call;};
 struct Manifest{
  std::string id,name,version,loader="*",main;bool enabled=true,native=false,panel=false;
- std::map<std::string,std::string> capabilities,packages;std::vector<std::string> permissions,methods,hosts;std::vector<Tool> tools;std::vector<MenuItem> menu;
+ std::map<std::string,std::string> capabilities,packages;std::vector<std::string> permissions,methods;std::vector<Tool> tools;std::vector<MenuItem> menu;
  bool permits(const std::string &key)const{for(const auto &entry:permissions)if(entry==key)return true;return false;}
 };
 inline bool text(const json &value,size_t limit){return value.is_string()&&!value.get_ref<const std::string&>().empty()&&value.get_ref<const std::string&>().size()<=limit;}
@@ -104,7 +104,7 @@ inline std::string parse(const json &definition,Manifest &out){
  out.id=definition["id"].get<std::string>();
  if(definition.contains("enabled")){if(!definition["enabled"].is_boolean())return "enabled";out.enabled=definition["enabled"].get<bool>();}
  out.native=definition.contains("nativeLibraries");
- bool declarative=definition.contains("permissions")||definition.contains("contributes")||definition.contains("main")||definition.contains("hosts");
+ bool declarative=definition.contains("permissions")||definition.contains("contributes")||definition.contains("main");
  if(!out.native&&!declarative)return "empty";
  if(definition.contains("name")){if(!text(definition["name"],128))return "name";out.name=definition["name"].get<std::string>();}
  if(definition.contains("version")){Version parsed;if(!definition["version"].is_string()||!parse_version(definition["version"].get<std::string>(),parsed))return "version";out.version=definition["version"].get<std::string>();}
@@ -126,15 +126,6 @@ inline std::string parse(const json &definition,Manifest &out){
    out.permissions.push_back(key);
   }
  }
- if(definition.contains("hosts")){
-  // Exact host names, or "*.example.com" for any subdomain; outbound requests go nowhere else.
-  const auto &list=definition["hosts"];if(!list.is_array()||list.empty()||list.size()>16||!out.permits("http"))return "hosts";
-  for(const auto &entry:list){
-   if(!text(entry,253))return "hosts";auto host=entry.get<std::string>();auto name=host.rfind("*.",0)==0?host.substr(2):host;bool repeated=false;for(const auto &known:out.hosts)repeated=repeated||known==host;
-   if(repeated||name.empty()||name[0]=='.'||name[0]=='-')return "hosts";for(unsigned char c:name)if(!islower(c)&&!isdigit(c)&&c!='.'&&c!='-'&&c!=':')return "hosts";
-   out.hosts.push_back(host);
-  }
- }else if(out.permits("http"))return "hosts";
  if(definition.contains("main")){
   if(out.native||!text(definition["main"],512)||!out.capabilities.count("runtime.lua"))return "main";out.main=definition["main"].get<std::string>();
   if(out.main.size()<5||out.main.compare(out.main.size()-4,4,".lua")!=0)return "main";

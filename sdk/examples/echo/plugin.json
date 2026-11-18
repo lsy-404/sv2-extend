@@ -8,7 +8,6 @@
     "capabilities": { "runtime.lua": ">=5.5", "http": "*", "http.server": "*" }
   },
   "permissions": ["http", "http.server"],
-  "hosts": ["127.0.0.1"],
   "main": "main.lua",
   "contributes": {
     "methods": ["start", "stop", "fetch"]

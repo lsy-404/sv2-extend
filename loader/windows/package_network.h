@@ -41,12 +41,6 @@ inline void put_body(json &target,const std::string &body){if(body.empty()||!wid
 inline bool header_token(const std::string &name){if(name.empty()||name.size()>128)return false;for(unsigned char c:name)if(!isalnum(c)&&!strchr("!#$%&'*+-.^_`|~",c))return false;return true;}
 inline bool header_value(const std::string &value){if(value.size()>8192)return false;for(unsigned char c:value)if(c=='\r'||c=='\n'||c==0)return false;return true;}
 inline bool loopback(const std::string &host){return host=="127.0.0.1"||host=="localhost"||host=="::1";}
-// A pattern is an exact host name, or "*.example.com" for any subdomain.
-inline bool host_allowed(const std::vector<std::string> &patterns,const std::string &host){
- for(const auto &pattern:patterns){if(pattern==host)return true;if(pattern.rfind("*.",0)==0&&host.size()>pattern.size()-1&&host.compare(host.size()-(pattern.size()-1),pattern.size()-1,pattern,1,pattern.size()-1)==0)return true;}
- return false;
-}
-
 struct Handle{HINTERNET value=nullptr;~Handle(){if(value)WinHttpCloseHandle(value);}operator HINTERNET()const{return value;}};
 struct Outbound{std::wstring host,path,method,headers;std::string body;INTERNET_PORT port=0;bool secure=false;int timeout=30000;};
 inline std::atomic<int> outbound_active{0};
@@ -57,8 +51,8 @@ inline json perform(const Outbound &request){
  if(!session||!WinHttpSetTimeouts(session,request.timeout,request.timeout,request.timeout,request.timeout))return failed("open");
  connection.value=WinHttpConnect(session,request.host.c_str(),request.port,0);if(!connection)return failed("connect");
  call.value=WinHttpOpenRequest(connection,request.method.c_str(),request.path.c_str(),nullptr,WINHTTP_NO_REFERER,WINHTTP_DEFAULT_ACCEPT_TYPES,request.secure?WINHTTP_FLAG_SECURE:0);if(!call)return failed("request");
- // Redirects would leave the declared hosts; cookies and credentials are never implied.
- DWORD disabled=WINHTTP_DISABLE_REDIRECTS|WINHTTP_DISABLE_COOKIES|WINHTTP_DISABLE_AUTHENTICATION;if(!WinHttpSetOption(call,WINHTTP_OPTION_DISABLE_FEATURE,&disabled,sizeof disabled))return failed("request");
+ // Cookies and credentials are never implied.
+ DWORD disabled=WINHTTP_DISABLE_COOKIES|WINHTTP_DISABLE_AUTHENTICATION;if(!WinHttpSetOption(call,WINHTTP_OPTION_DISABLE_FEATURE,&disabled,sizeof disabled))return failed("request");
  if(!request.headers.empty()&&!WinHttpAddRequestHeaders(call,request.headers.c_str(),static_cast<DWORD>(-1),WINHTTP_ADDREQ_FLAG_ADD|WINHTTP_ADDREQ_FLAG_REPLACE))return failed("headers");
  if(!WinHttpSendRequest(call,WINHTTP_NO_ADDITIONAL_HEADERS,0,request.body.empty()?WINHTTP_NO_REQUEST_DATA:const_cast<char*>(request.body.data()),static_cast<DWORD>(request.body.size()),static_cast<DWORD>(request.body.size()),0))return failed("send");
  if(!WinHttpReceiveResponse(call,nullptr))return failed("receive");
@@ -72,7 +66,7 @@ inline json perform(const Outbound &request){
  json result{{"status",status},{"headers",headers}};put_body(result,body);return {{"ok",true},{"result",result}};
 }
 // Validates on the caller's thread, then completes on a worker thread.
-inline void request(const json &arguments,const std::vector<std::string> &hosts,Done done){
+inline void request(const json &arguments,Done done){
  Outbound out;
  if(!arguments.contains("url")||!arguments["url"].is_string()){done(failure("INVALID_ARGUMENT"));return;}
  auto url=wide(arguments["url"].get<std::string>());URL_COMPONENTS parts{};parts.dwStructSize=sizeof parts;parts.dwSchemeLength=parts.dwHostNameLength=parts.dwUrlPathLength=parts.dwExtraInfoLength=parts.dwUserNameLength=static_cast<DWORD>(-1);
@@ -80,7 +74,6 @@ inline void request(const json &arguments,const std::vector<std::string> &hosts,
  out.host.assign(parts.lpszHostName,parts.dwHostNameLength);auto host=lower(narrow(out.host));out.secure=parts.nScheme==INTERNET_SCHEME_HTTPS;out.port=parts.nPort;
  if(parts.lpszUrlPath)out.path.assign(parts.lpszUrlPath,parts.dwUrlPathLength);if(parts.lpszExtraInfo){std::wstring extra(parts.lpszExtraInfo,parts.dwExtraInfoLength);out.path+=extra.substr(0,extra.find(L'#'));}if(out.path.empty())out.path=L"/";
  if(!out.secure&&(parts.nScheme!=INTERNET_SCHEME_HTTP||!loopback(host))){done(failure("INSECURE_URL"));return;}
- if(!host_allowed(hosts,host)){done(failure("HOST_NOT_DECLARED",{{"host",host}}));return;}
  auto method=arguments.value("method",json("GET"));if(!method.is_string()){done(failure("INVALID_ARGUMENT"));return;}auto verb=method.get<std::string>();
  bool known=false;for(auto allowed:{"GET","HEAD","POST","PUT","PATCH","DELETE"})known=known||verb==allowed;if(!known){done(failure("INVALID_ARGUMENT"));return;}out.method=wide(verb);
  if(arguments.contains("headers")){
