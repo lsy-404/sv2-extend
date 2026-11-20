@@ -76,12 +76,17 @@ static void refreshIcon(void *button,Category &category,bool active){
  Drawable second=raw?parseIcon(svg):Drawable{nullptr};
  Drawable third=raw?parseIcon(svg):Drawable{nullptr};
  if(raw&&(!first.p||!second.p||!third.p))return;
+ struct Bounds {float x,y,width,height;};
+ Bounds bounds=((Bounds(*)(void*))(*(void***)normal.p)[0x1a8/8])(normal.p);
+ memcpy((char *)button+0x2c0,&bounds,sizeof bounds);
  replaceDrawable((void **)((char *)button+0x2a0),normal);
  ((void(*)(void*,bool))(slide+0x10101f2dcULL))(button,active);
  if(raw){
   replaceDrawable(&copies[0],first);replaceDrawable(&copies[1],second);replaceDrawable(&copies[2],third);
  }
  buttonIcons[button]={&category,category.iconGeneration,active,{copies[0],copies[1],copies[2]}};
+ uint64_t size=0;memcpy(&size,(char *)button+0x40,sizeof size);
+ ((void(*)(void*,uint64_t,uint64_t,bool))(slide+0x10080325cULL))(button,0,size,true);
 }
 static void remove(void *pane){
  loader_native_panel_remove(pane);
@@ -222,6 +227,7 @@ static bool profile(){
  {0x101020c84ULL,328,"c569460bf8b906c8cb0d436e800575a8e609759b647aacb2e1463971647ad620"},
  {0x1010206fcULL,1272,"87c1fe1f70c255b593112b15e36c17fc6aef4b62296ff8a3a92c65e4c82cf30f"},
  {0x10101f2dcULL,704,"23473f554006b7e29efa5eb11a8afff51f4ff779ed7f32aa9261fe8197ca66db"},
+ {0x10080325cULL,64,"5cb47c8d2764367adf762cc8b474c381101fe1dc854dc7cd6d0612cd0bb19bf6"},
  {0x101020e60ULL,236,"c0c1a7bbb6781784a99ed4fed27777b47c0742f65b6aa4bbf0a96327ffd9090f"},
  {0x101020f4cULL,240,"ac369b8d9c384c276853a210d6f6fb181b61744987889f5641818c69869932fe"},
  {0x101024958ULL,436,"242b677b57c546560277e2c19a975f226a6dbc6f78fe0a245f84f22f443864e6"},
