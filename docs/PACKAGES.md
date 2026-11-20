@@ -47,7 +47,9 @@
 | `permissions` | 需要用户开启的权限：可授权能力的标识，或 `package.<id>`（调用所依赖的包提供的方法）。 |
 | `main` | 包代码入口，包内相对路径的 `.lua` 文件；需要能力 `runtime.lua`。 |
 | `update.url` | 包自己声明的更新端点（必须 HTTPS）。加载器把 `update.fetch` 锁定到此地址，并在包状态和 `extend.package.update` 中公开它。 |
-| `icon` | 包的分类图标，内联 SVG 字符串（以 `<svg` 开头，≤2048 字节）。两平台据此渲染；不声明时用通用插件图标。 |
+| `icon` | 包的分类图标，内联 SVG 字符串（≤2048 字节）。省略时使用通用插件图标。 |
+| `activeIcon` | 分类打开时使用的内联 SVG 字符串（≤2048 字节），保留其中的配色。 |
+| `matchIconColors` | 布尔值，默认 `true`。将单色黑白 SVG 匹配到宿主的浅灰和激活绿。设为 `false` 可保留图标自带的配色。 |
 | `contributes.methods` | 向依赖本包的其他包公开的处理函数名，方法名为 `<包 id>.<函数名>`；需要 `main`。 |
 | `contributes.mcpTools` | MCP 工具，名称以 `svext_` 开头；需要能力 `mcp.tools`。 |
 | `contributes.panel.menu` | 在 Extend 中注册的面板菜单：动作，或带标题的一组动作，最多 24 行；需要能力 `panel`。 |
@@ -221,7 +223,7 @@ end
 
 ## 外观
 
-扩展包的分类图标由包自己声明（清单 `icon`，内联 SVG），经插件面板描述符流向两平台的分类栏，由加载器统一渲染：声明了图标就用声明值，否则回退到通用插件图标；Extend 根分类图标由加载器自有。内置运行时（Lua / JavaScript 扩展、MCP）同样在各自描述符里声明图标，不再由加载器按分类标识硬编码，因此两平台表现一致、与分类标识无关。图标素材集中在 `loader/packages/builtin_icons.h`，macOS 与 Windows 共用同一份。
+包清单提供分类图标的初始值。原生插件可以在自己的面板描述符中指定这些字段，并通过 `update_plugin_ui` 在运行中修改。Windows 声明式包可在面板注册后调用 `extend.request("ui.icon", fields, callback)` 更新自己的图标。运行中传入空字符串可清除对应的 `icon` 或 `activeIcon`。内置 Lua、JavaScript 和 MCP 分类使用自己的面板描述符，Extend 根图标由加载器管理。
 
 ## 平台状态
 

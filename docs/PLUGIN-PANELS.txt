@@ -33,7 +33,10 @@ loader_api.h 的 append-only register_plugin_ui / update_plugin_ui / unregister_
 注册后及设置保存后收到 kind:"settings",settings:{...}；按钮收到 kind:"action",action:"..."。
 回调 JSON 仅在调用内有效。插件在释放 owner_context 前注销；隐藏不触发卸载。
 最多同时注册 32 个 UI id；包含公开内置扩展，插件包可以注册多个独立 id。
-macOS 的 Lua、JS、MCP 和 Extend 分类有各自图标；Windows 为 Extend、MCP 和其他插件提供相应图标。图标跟随宿主状态着色。
+插件可在注册描述符和更新消息中指定 icon、activeIcon 和 matchIconColors。
+icon 和 activeIcon 是最长 2048 字节的内联 SVG，运行中传入空字符串可清除该字段。
+默认将单色黑白图标匹配到宿主的浅灰与激活绿。activeIcon 在分类打开时保留自带的配色。
+将 matchIconColors 设为 false 可保留自带配色。
 此版本通过声明式描述提供标签、按钮和设置控件，不开放任意外部网页或外部管理窗口。
 
 数据与生命周期
