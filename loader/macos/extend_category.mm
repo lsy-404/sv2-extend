@@ -131,7 +131,12 @@ static void barLayout(void *bar){
  if(!c){const char *label=*(const char**)((char*)button+0x298);if(label&&!strcmp(label,"LICENSE"))y+=12;}
  else{if(!grouped){y+=12;grouped=true;}uintptr_t *label=(uintptr_t*)((char*)button+0x298);if(strcmp((const char*)*label,c->label)){((void(*)(void*))(slide+0x100699298ULL))(label);*label=((uintptr_t(*)(const char*))(slide+0x100662a08ULL))(c->label);}
  void *container=*(void**)((char*)bar+0xf8);void *model=((void*(*)(void*,void*))(slide+0x101024958ULL))(container,&c->object);
- refreshIcon(button,*c,model&&!*(uint8_t*)((char*)model+0x34));}
+ bool selected=model&&!*(uint8_t*)((char*)model+0x34);
+ if(!model){
+  void **open=*(void***)((char*)container+0x98);int openCount=*(int*)((char*)container+0xa4);
+  if(openCount>=0&&openCount<=64)for(int n=0;n<openCount;n++)if(open[n]==&c->object){selected=true;break;}
+ }
+ refreshIcon(button,*c,selected);}
  ((void(*)(void*,int,int,int,int))(slide+0x1007ff7dcULL))(button,0,y,width,row);y+=row;
  }
 }
