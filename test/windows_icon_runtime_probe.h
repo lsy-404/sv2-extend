@@ -29,7 +29,11 @@ static void icon_test_tick(){
  } else {
   auto state=R"({"icon":"<svg xmlns='http://www.w3.org/2000/svg'><path fill='white' d='M0 0h7v7z'/></svg>","activeIcon":"<svg xmlns='http://www.w3.org/2000/svg'><path fill='blue' d='M0 0h6v6z'/></svg>"})";
   bool ok=native_panel::update_ui("opensv2.lua-extend",state,found->second.owner)==LOADER_OK;
-  if(ok){tick();for(const auto &b:button_icons)if(std::strcmp(b.second.category->id,"opensv2.lua-extend")==0)ok=ok&&b.second.active&&b.second.generation==b.second.category->icon_generation;}
+  if(ok){
+   tick();ok=false;
+   for(const auto &b:button_icons)if(std::strcmp(b.second.category->id,"opensv2.lua-extend")==0)
+    ok=b.second.active&&b.second.generation==b.second.category->icon_generation&&b.second.copies[0]&&b.second.copies[1]&&b.second.copies[2];
+  }
   save(ok?"runtime-refreshed=ok":"runtime-refreshed=failed");if(ok)stage=4;
  }
 }

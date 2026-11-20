@@ -195,17 +195,10 @@ static bool release_string(void *value) {
   reinterpret_cast<void (*)(void *)>(image + 0x10baa40)(text - 0x10);
  return true;
 }
-static void *icon(void *object, void **output) {
- auto category = registry_category(object);
- // The Loader owns the root icon; every other category shows its declared icon, falling back to the generic plugin mark.
- const char *svg = category == &categories[0] ? OPENSV2_ICON_ROOT
-  : category && category->icon[0] ? category->icon
-  : OPENSV2_ICON_PLUGIN;
- const std::string resolved=category && category!=&categories[0]
-  ? panel_icon::resolve(svg,category->active_icon,category->match_icon_colors,false) : svg;
+static void *parse_drawable_svg(const char *svg,void **output) {
  *output = nullptr;
  void *source = nullptr, *xml = nullptr;
- reinterpret_cast<void *(*)(void *, const char *)>(image + 0xe6fac0)(&source, resolved.c_str());
+ reinterpret_cast<void *(*)(void *, const char *)>(image + 0xe6fac0)(&source,svg);
  if (!source) return output;
  reinterpret_cast<void *(*)(void *, void *)>(image + 0xe588e0)(&xml, &source);
  release_string(source);
@@ -215,6 +208,15 @@ static void *icon(void *object, void **output) {
   reinterpret_cast<void (*)(void *, size_t)>(image + 0x10baa40)(xml, 0x20);
  }
  return output;
+}
+static void *icon(void *object, void **output) {
+ auto category = registry_category(object);
+ const char *svg = category == &categories[0] ? OPENSV2_ICON_ROOT
+  : category && category->icon[0] ? category->icon
+  : OPENSV2_ICON_PLUGIN;
+ const std::string resolved=category && category!=&categories[0]
+  ? panel_icon::resolve(svg,category->active_icon,category->match_icon_colors,false) : svg;
+ return parse_drawable_svg(resolved.c_str(),output);
 }
 static void destroy_drawable(void *drawable) {
  if (drawable) reinterpret_cast<void (*)(void *,unsigned)>((*static_cast<void ***>(drawable))[0])(drawable,1);
@@ -237,23 +239,10 @@ static bool refresh_icon(void *button,Category &category,bool active) {
  const char *source=category.icon[0]?category.icon:OPENSV2_ICON_PLUGIN;
  bool native_colors=false;
  std::string svg=panel_icon::resolve(source,category.active_icon,category.match_icon_colors,active,&native_colors);
- auto parse=[&](void **out){
-  *out=nullptr;
-  void *string=nullptr,*xml=nullptr;
-  reinterpret_cast<void *(*)(void *,const char *)>(image+0xe6fac0)(&string,svg.c_str());
-  if(!string)return;
-  reinterpret_cast<void *(*)(void *,void *)>(image+0xe588e0)(&xml,&string);
-  release_string(string);
-  if(xml){
-   reinterpret_cast<void *(*)(void *,void *)>(image+0xc68000)(out,xml);
-   reinterpret_cast<void (*)(void *)>(image+0xe5ce40)(xml);
-   reinterpret_cast<void (*)(void *,size_t)>(image+0x10baa40)(xml,0x20);
-  }
- };
  void *normal=nullptr,*raw[3]{};
- parse(&normal);
+ parse_drawable_svg(svg.c_str(),&normal);
  const bool raw_colors=!native_colors;
- if(raw_colors)for(auto &copy:raw)parse(&copy);
+ if(raw_colors)for(auto &copy:raw)parse_drawable_svg(svg.c_str(),&copy);
  if(!normal||(raw_colors&&(!raw[0]||!raw[1]||!raw[2]))){
   destroy_drawable(normal);for(void *copy:raw)destroy_drawable(copy);return false;
  }
