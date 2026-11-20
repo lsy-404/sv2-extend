@@ -59,7 +59,7 @@ void category_update(void *pane,const char *id,HWND window,const RECT &bounds,bo
 void category_remove(void *pane){native_panel::dock_remove(pane);}
 bool category_sync_pending=false;
 bool category_sync(){
- if(!native_category_registry::prepared)return true;auto snapshot=native_panel::categories();std::vector<native_category_registry::Entry> entries;entries.reserve(snapshot.size());for(const auto &entry:snapshot)entries.push_back({entry.id.c_str(),entry.title.c_str(),entry.icon.c_str(),entry.visible});
+ if(!native_category_registry::prepared)return true;auto snapshot=native_panel::categories();std::vector<native_category_registry::Entry> entries;entries.reserve(snapshot.size());for(const auto &entry:snapshot)entries.push_back({entry.id.c_str(),entry.title.c_str(),entry.icon.c_str(),entry.active_icon.c_str(),entry.match_icon_colors,entry.visible});
  bool was_pending=category_sync_pending;category_sync_pending=!native_category_registry::sync(entries.data(),entries.size(),native_panel::extend_visible());if(category_sync_pending&&!was_pending)log_message("native-category-sync-unavailable");return !category_sync_pending;
 }
 void category_tick(){
@@ -353,7 +353,7 @@ void package_panel(Package &package){
   if(known){detail.clear();for(auto method:known->methods)detail+=(detail.empty()?"":"、")+std::string(method);}
   fields.push_back({{"key","grant."+key},{"title",title},{"detail",detail},{"section","权限"},{"type","boolean"},{"default",false}});
  }
- auto descriptor=package_state(package);descriptor["id"]=package.manifest.id;descriptor["name"]=package.manifest.name;descriptor["version"]=package.manifest.version;descriptor["settings"]=fields;if(!package.manifest.icon.empty())descriptor["icon"]=package.manifest.icon;
+ auto descriptor=package_state(package);descriptor["id"]=package.manifest.id;descriptor["name"]=package.manifest.name;descriptor["version"]=package.manifest.version;descriptor["settings"]=fields;if(!package.manifest.icon.empty())descriptor["icon"]=package.manifest.icon;if(!package.manifest.active_icon.empty())descriptor["activeIcon"]=package.manifest.active_icon;descriptor["matchIconColors"]=package.manifest.match_icon_colors;
  package.panel=true;if(native_panel::register_ui(descriptor.dump().c_str(),package_changed,&package)!=LOADER_OK){package.panel=false;log_message("package-panel-unavailable");}
 }
 void startup_receipt();

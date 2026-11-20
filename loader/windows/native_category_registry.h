@@ -9,6 +9,7 @@
 #include <cstring>
 #include "native_string.h"
 #include "../packages/builtin_icons.h"
+#include "../packages/panel_icon.h"
 #include <set>
 #include <string>
 #include <vector>
@@ -23,6 +24,8 @@ struct Category {
  char id[97]{};
  char title[513]{};
  char icon[4096]{};
+ char active_icon[4096]{};
+ bool match_icon_colors = true;
  bool present = false;
  bool visible = false;
 };
@@ -31,7 +34,7 @@ static unsigned char *image;
 static DWORD thread_id;
 static bool prepared;
 static const char *prepare_result="not_attempted";
-struct Entry { const char *id; const char *title; const char *icon; bool visible; };
+struct Entry { const char *id; const char *title; const char *icon; const char *active_icon; bool match_icon_colors; bool visible; };
 using DockUpdate = void (*)(void *, const char *, HWND, const RECT &, bool);
 using DockRemove = void (*)(void *);
 using OwnsChild = bool (*)(void *, void *);
@@ -189,9 +192,11 @@ static void *icon(void *object, void **output) {
  const char *svg = category == &categories[0] ? OPENSV2_ICON_ROOT
   : category && category->icon[0] ? category->icon
   : OPENSV2_ICON_PLUGIN;
+ const std::string resolved=category && category!=&categories[0]
+  ? panel_icon::resolve(svg,category->active_icon,category->match_icon_colors,false) : svg;
  *output = nullptr;
  void *source = nullptr, *xml = nullptr;
- reinterpret_cast<void *(*)(void *, const char *)>(image + 0xe6fac0)(&source, svg);
+ reinterpret_cast<void *(*)(void *, const char *)>(image + 0xe6fac0)(&source, resolved.c_str());
  if (!source) return output;
  reinterpret_cast<void *(*)(void *, void *)>(image + 0xe588e0)(&xml, &source);
  release_string(source);
@@ -548,6 +553,8 @@ static bool sync(const Entry *entries, size_t count, bool root_visible) {
   auto &category = categories[mapping[i]];
   std::strcpy(category.id, entries[i].id); std::strcpy(category.title, entries[i].title);
   std::snprintf(category.icon, sizeof category.icon, "%s", entries[i].icon ? entries[i].icon : "");
+  std::snprintf(category.active_icon, sizeof category.active_icon, "%s", entries[i].active_icon ? entries[i].active_icon : "");
+  category.match_icon_colors=entries[i].match_icon_colors;
   category.present = true; category.visible = entries[i].visible;
  }
  tick();
