@@ -184,8 +184,14 @@ static void *icon(void *object, void **output) {
  static const char root_svg[] = "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"24\" height=\"24\" viewBox=\"0 0 24 24\"><rect width=\"24\" height=\"24\" fill=\"black\" opacity=\"0\"/><g transform=\"translate(3 3) scale(.75)\" fill=\"none\" stroke=\"black\" stroke-width=\"1.5\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><rect x=\"3\" y=\"3\" width=\"6\" height=\"6\" rx=\"1\"/><rect x=\"3\" y=\"15\" width=\"6\" height=\"6\" rx=\"1\"/><rect x=\"15\" y=\"15\" width=\"6\" height=\"6\" rx=\"1\"/><path d=\"M14 6h8M18 2v8\"/></g></svg>";
  static const char plugin_svg[] = "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"24\" height=\"24\" viewBox=\"0 0 24 24\"><rect width=\"24\" height=\"24\" fill=\"black\" opacity=\"0\"/><g transform=\"translate(3 3) scale(.75)\" fill=\"none\" stroke=\"black\" stroke-width=\"1.5\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><path d=\"M4 4h6V3a2 2 0 0 1 4 0v1h6v6h1a2 2 0 0 1 0 4h-1v6h-6v-1a2 2 0 0 0-4 0v1H4v-6h1a2 2 0 0 0 0-4H4z\"/></g></svg>";
  static const char mcp_svg[] = "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"24\" height=\"24\" viewBox=\"0 0 24 24\"><rect width=\"24\" height=\"24\" fill=\"black\" opacity=\"0\"/><g transform=\"translate(3 3) scale(.75)\" fill=\"none\" stroke=\"black\" stroke-width=\"1.5\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><circle cx=\"5\" cy=\"12\" r=\"3\"/><circle cx=\"19\" cy=\"5\" r=\"3\"/><circle cx=\"19\" cy=\"19\" r=\"3\"/><path d=\"m8 10 8-4M8 14l8 4\"/></g></svg>";
+ static const char javascript_svg[] = "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"24\" height=\"24\" viewBox=\"0 0 24 24\"><rect width=\"24\" height=\"24\" fill=\"black\" opacity=\"0\"/><g transform=\"translate(3 3) scale(.75)\"><rect x=\"2\" y=\"2\" width=\"20\" height=\"20\" rx=\"1\" fill=\"none\" stroke=\"black\" stroke-width=\"1.4\"/><path d=\"M11 9v7c0 3-4 3-5 1m13-7c-3-2-6 1-3 3l2 1c4 3-1 6-4 3\" fill=\"none\" stroke=\"black\" stroke-width=\"1.7\" stroke-linecap=\"round\"/></g></svg>";
+ static const char lua_svg[] = "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"24\" height=\"24\" viewBox=\"0 0 24 24\"><rect width=\"24\" height=\"24\" fill=\"black\" opacity=\"0\"/><g transform=\"translate(3 3) scale(.75)\"><path fill=\"black\" fill-rule=\"evenodd\" d=\"M19 13a8 8 0 1 1-16 0 8 8 0 0 1 16 0z M17 10a3 3 0 1 1-6 0 3 3 0 0 1 6 0z\"/><circle cx=\"21\" cy=\"3\" r=\"2\" fill=\"black\"/></g></svg>";
  auto category = registry_category(object);
- const char *svg = category == &categories[0] ? root_svg : category && !std::strcmp(category->id, "sv2.mcp") ? mcp_svg : plugin_svg;
+ const char *svg = category == &categories[0] ? root_svg
+  : category && !std::strcmp(category->id, "sv2.mcp") ? mcp_svg
+  : category && !std::strcmp(category->id, "opensv2.javascript-extend") ? javascript_svg
+  : category && !std::strcmp(category->id, "opensv2.lua-extend") ? lua_svg
+  : plugin_svg;
  *output = nullptr;
  void *source = nullptr, *xml = nullptr;
  reinterpret_cast<void *(*)(void *, const char *)>(image + 0xe6fac0)(&source, svg);
