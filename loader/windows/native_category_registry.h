@@ -12,6 +12,7 @@
 #include "../packages/panel_icon.h"
 #include <set>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 namespace editor_gate { bool version_matches(); }
@@ -28,6 +29,7 @@ struct Category {
  bool match_icon_colors = true;
  bool present = false;
  bool visible = false;
+ uint64_t icon_generation = 0;
 };
 static std::array<Category, capacity> categories;
 static unsigned char *image;
@@ -47,6 +49,13 @@ static void (*scripts_remove)(void *);
 static HWND host_window;
 static std::set<void *> panes;
 static std::set<void *> bars;
+struct ButtonIconState {
+ Category *category;
+ uint64_t generation;
+ bool active;
+ std::array<void *,3> copies;
+};
+static std::unordered_map<void *,ButtonIconState> button_icons;
 
 static bool readable(const void *address, size_t length) {
  if (!address || !length) return false;
@@ -207,6 +216,56 @@ static void *icon(void *object, void **output) {
  }
  return output;
 }
+static void destroy_drawable(void *drawable) {
+ if (drawable) reinterpret_cast<void (*)(void *,unsigned)>((*static_cast<void ***>(drawable))[0])(drawable,1);
+}
+static void replace_drawable(void **slot,void *replacement) {
+ void *previous=*slot;
+ *slot=replacement;
+ destroy_drawable(previous);
+}
+static bool refresh_icon(void *button,Category &category,bool active) {
+ if (&category==&categories[0] || !readable(button,0x398)) return false;
+ auto bytes=static_cast<unsigned char *>(button);
+ void *table=nullptr;
+ std::memcpy(&table,bytes,sizeof table);
+ if(table!=image+0x14eaac0)return false;
+ auto copies=reinterpret_cast<void **>(bytes+0x368);
+ auto cached=button_icons.find(button);
+ if(cached!=button_icons.end()&&cached->second.category==&category&&cached->second.generation==category.icon_generation&&
+    cached->second.active==active&&cached->second.copies[0]==copies[0]&&cached->second.copies[1]==copies[1]&&cached->second.copies[2]==copies[2])return true;
+ const char *source=category.icon[0]?category.icon:OPENSV2_ICON_PLUGIN;
+ std::string svg=panel_icon::resolve(source,category.active_icon,category.match_icon_colors,active);
+ auto parse=[&](void **out){
+  *out=nullptr;
+  void *string=nullptr,*xml=nullptr;
+  reinterpret_cast<void *(*)(void *,const char *)>(image+0xe6fac0)(&string,svg.c_str());
+  if(!string)return;
+  reinterpret_cast<void *(*)(void *,void *)>(image+0xe588e0)(&xml,&string);
+  release_string(string);
+  if(xml){
+   reinterpret_cast<void *(*)(void *,void *)>(image+0xc68000)(out,xml);
+   reinterpret_cast<void (*)(void *)>(image+0xe5ce40)(xml);
+   reinterpret_cast<void (*)(void *,size_t)>(image+0x10baa40)(xml,0x20);
+  }
+ };
+ void *normal=nullptr,*raw[3]{};
+ parse(&normal);
+ const bool raw_colors=!category.match_icon_colors||(active&&category.active_icon[0]);
+ if(raw_colors)for(auto &copy:raw)parse(&copy);
+ if(!normal||(raw_colors&&(!raw[0]||!raw[1]||!raw[2]))){
+  destroy_drawable(normal);for(void *copy:raw)destroy_drawable(copy);return false;
+ }
+ struct Bounds {float x,y,width,height;} bounds{};
+ auto drawable_table=*static_cast<void ***>(normal);
+ reinterpret_cast<Bounds *(*)(void *,Bounds *)>(drawable_table[0x1a0/sizeof(void *)])(normal,&bounds);
+ std::memcpy(bytes+0x380,&bounds,sizeof bounds);
+ replace_drawable(reinterpret_cast<void **>(bytes+0x360),normal);
+ reinterpret_cast<void (*)(void *,bool)>(image+0xbcf8f0)(button,active);
+ if(raw_colors)for(unsigned i=0;i<3;i++)replace_drawable(&copies[i],raw[i]);
+ button_icons[button]={&category,category.icon_generation,active,{copies[0],copies[1],copies[2]}};
+ return true;
+}
 static bool button_title(void *button, const char *title) {
  auto slot = reinterpret_cast<void **>(static_cast<unsigned char *>(button) + 0x358);
  if (!readable(slot, sizeof *slot) || !*slot || !readable(*slot, 1)) return false;
@@ -294,6 +353,15 @@ static void layout_bar(void *bar) {
   if (!bars.count(bar)) return;
   if (!visible) { set_bounds(buttons[i], 0, 0, 0, 0); continue; }
   if (category && !button_title(buttons[i], category->title)) continue;
+  if (category && category!=&categories[0]) {
+   void *container=nullptr;
+   std::memcpy(&container,bytes+0xf8,sizeof container);
+   if (readable(container,0xa8)) {
+    void *model=reinterpret_cast<void *(*)(void *,void *)>(image+0xbd1620)(container,&category->object);
+    if (!model || (readable(model,0x35)&&model_category(model)==category))
+     refresh_icon(buttons[i],*category,model&&!static_cast<unsigned char *>(model)[0x34]);
+   }
+  }
   if (buttons[i] == separator) y += 12;
   if (i == boundary) y += 12;
   set_bounds(buttons[i], 0, y, width, row); y += row;
@@ -305,6 +373,13 @@ static void bar_resized(void *bar) {
  if (prepared) layout_bar(bar);
 }
 static void *bar_destroy(void *bar, unsigned flags) {
+ if(readable(bar,0x250)){
+  auto bytes=static_cast<unsigned char *>(bar);
+  void **buttons=nullptr;int count=0;
+  std::memcpy(&buttons,bytes+0x240,sizeof buttons);std::memcpy(&count,bytes+0x24c,4);
+  if(count>0&&count<=128&&readable(buttons,count*sizeof(void *)))
+   for(int i=0;i<count;i++)button_icons.erase(buttons[i]);
+ }
  bars.erase(bar);
  return reinterpret_cast<void *(*)(void *, unsigned)>(image + 0xbd0330)(bar, flags);
 }
@@ -422,6 +497,8 @@ static bool prepare(unsigned char *base, DWORD main_thread, DockUpdate update, D
  if (std::memcmp(base + 0xbcf2a0, content_signature, sizeof content_signature) || std::memcmp(base + 0x8ec3f0, height_signature, sizeof height_signature)) return false;
  constexpr unsigned char parse_signature[] = {0x48,0x89,0x5c,0x24,0x08,0x48,0x89,0x74,0x24,0x10};
  prepare_result="drawable_signature";if (std::memcmp(base + 0xe588e0, parse_signature, sizeof parse_signature) || std::memcmp(base + 0xc68000, parse_signature, sizeof parse_signature)) return false;
+ constexpr unsigned char icon_refresh_signature[]={0x48,0x89,0x5c,0x24,0x18,0x48,0x89,0x6c,0x24,0x20,0x56,0x57,0x41,0x56};
+ prepare_result="icon_refresh_signature";if(std::memcmp(base+0xbcf8f0,icon_refresh_signature,sizeof icon_refresh_signature))return false;
  image = base;
  thread_id = main_thread;
  dock_update = update;
@@ -551,6 +628,9 @@ static bool sync(const Entry *entries, size_t count, bool root_visible) {
  for (unsigned j = 1; j < capacity; ++j) categories[j].present = false;
  for (size_t i = 0; i < count; ++i) {
   auto &category = categories[mapping[i]];
+  if(std::strcmp(category.id,entries[i].id)||std::strcmp(category.icon,entries[i].icon?entries[i].icon:"")||
+     std::strcmp(category.active_icon,entries[i].active_icon?entries[i].active_icon:"")||
+     category.match_icon_colors!=entries[i].match_icon_colors)++category.icon_generation;
   std::strcpy(category.id, entries[i].id); std::strcpy(category.title, entries[i].title);
   std::snprintf(category.icon, sizeof category.icon, "%s", entries[i].icon ? entries[i].icon : "");
   std::snprintf(category.active_icon, sizeof category.active_icon, "%s", entries[i].active_icon ? entries[i].active_icon : "");
