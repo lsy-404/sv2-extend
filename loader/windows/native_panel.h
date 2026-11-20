@@ -13,6 +13,7 @@
 #include "native_widgets.h"
 #include "native_label.h"
 #include "native_viewport.h"
+#include "../packages/panel_icon.h"
 #include "../../sdk/include/loader_api.h"
 
 namespace native_panel {
@@ -86,7 +87,7 @@ static bool field_value(const json &f,const json &v) {
 }
 static bool valid(const json &d) {
  if(!d.is_object()||!d.contains("id")||!name(d["id"])||!d.contains("name")||!text(d["name"],128)||d["name"].get<std::string>().empty()||!d.contains("version")||!text(d["version"],64)||!d.contains("status")||!text(d["status"],128)||!d.contains("sidebar")||!d["sidebar"].is_object()||!d["sidebar"].contains("title")||!text(d["sidebar"]["title"],128)||!d["sidebar"].contains("rows")||!d["sidebar"]["rows"].is_array()||d["sidebar"]["rows"].size()>32||!d.contains("settings")||!d["settings"].is_array()||d["settings"].size()>64)return false;
- for(const auto *key:{"icon","activeIcon"})if(d.contains(key)&&(!text(d[key],2048)||(!d[key].get<std::string>().empty()&&d[key].get<std::string>().rfind("<svg",0)!=0)))return false;
+ for(const auto *key:{"icon","activeIcon"})if(d.contains(key)&&(!text(d[key],2048)||(!d[key].get_ref<const std::string&>().empty()&&!panel_icon::valid_svg(d[key].get_ref<const std::string&>()))))return false;
  if(d.contains("matchIconColors")&&!d["matchIconColors"].is_boolean())return false;
  const auto &sidebar=d["sidebar"];if(sidebar.contains("rowsBeforeSettings")&&(!sidebar["rowsBeforeSettings"].is_number_integer()||sidebar["rowsBeforeSettings"]<0||sidebar["rowsBeforeSettings"]>sidebar["rows"].size()))return false;
  std::set<std::string> ids;

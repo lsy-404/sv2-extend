@@ -235,7 +235,8 @@ static bool refresh_icon(void *button,Category &category,bool active) {
  if(cached!=button_icons.end()&&cached->second.category==&category&&cached->second.generation==category.icon_generation&&
     cached->second.active==active&&cached->second.copies[0]==copies[0]&&cached->second.copies[1]==copies[1]&&cached->second.copies[2]==copies[2])return true;
  const char *source=category.icon[0]?category.icon:OPENSV2_ICON_PLUGIN;
- std::string svg=panel_icon::resolve(source,category.active_icon,category.match_icon_colors,active);
+ bool native_colors=false;
+ std::string svg=panel_icon::resolve(source,category.active_icon,category.match_icon_colors,active,&native_colors);
  auto parse=[&](void **out){
   *out=nullptr;
   void *string=nullptr,*xml=nullptr;
@@ -251,7 +252,7 @@ static bool refresh_icon(void *button,Category &category,bool active) {
  };
  void *normal=nullptr,*raw[3]{};
  parse(&normal);
- const bool raw_colors=!category.match_icon_colors||(active&&category.active_icon[0]);
+ const bool raw_colors=!native_colors;
  if(raw_colors)for(auto &copy:raw)parse(&copy);
  if(!normal||(raw_colors&&(!raw[0]||!raw[1]||!raw[2]))){
   destroy_drawable(normal);for(void *copy:raw)destroy_drawable(copy);return false;
