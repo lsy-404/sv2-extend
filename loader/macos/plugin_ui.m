@@ -44,6 +44,11 @@ static BOOL sidebar(id v){
 }
 static BOOL descriptor(id v){
  if(![v isKindOfClass:NSDictionary.class]||!name(v[@"id"])||!text(v[@"name"],128)||![v[@"name"] length]||!text(v[@"version"],64)||!text(v[@"status"],128)||!sidebar(v[@"sidebar"])||![v[@"settings"] isKindOfClass:NSArray.class]||[v[@"settings"] count]>64)return NO;
+ for(NSString *key in @[@"icon",@"activeIcon"]){
+  id value=v[key];
+  if(value&&(!text(value,2048)||[value lengthOfBytesUsingEncoding:NSUTF8StringEncoding]>2048||([value length]&&![value hasPrefix:@"<svg"])))return NO;
+ }
+ if(v[@"matchIconColors"]&&!boolean(v[@"matchIconColors"]))return NO;
  NSMutableSet *keys=[NSMutableSet new];
  for(id f in v[@"settings"]){if(![f isKindOfClass:NSDictionary.class]||!name(f[@"key"])||[keys containsObject:f[@"key"]]||!text(f[@"title"],128))return NO;[keys addObject:f[@"key"]];
   if([f[@"type"] isEqual:@"choice"]){if(![f[@"choices"] isKindOfClass:NSArray.class]||![f[@"choices"] count]||[f[@"choices"] count]>32)return NO;for(id choice in f[@"choices"])if(!text(choice,256))return NO;}
@@ -81,8 +86,17 @@ int loader_register_plugin_ui(const char *json,loader_plugin_ui_event event,void
 }
 int loader_unregister_plugin_ui(const char *raw,void *owner){if(!NSThread.isMainThread||!raw)return LOADER_ERR_INVALID;NSString *identifier=[NSString stringWithUTF8String:raw];ExtendUIPlugin *plugin=plugins[identifier];if(!plugin||plugin.owner!=owner)return LOADER_ERR_INVALID;[plugins removeObjectForKey:identifier];generation++;return LOADER_OK;}
 int loader_update_plugin_ui(const char *raw,const char *json,void *owner){if(!NSThread.isMainThread||!raw)return LOADER_ERR_INVALID;NSString *identifier=[NSString stringWithUTF8String:raw];ExtendUIPlugin *plugin=plugins[identifier];id state=decode(json);if(!plugin||plugin.owner!=owner||![state isKindOfClass:NSDictionary.class])return LOADER_ERR_INVALID;
- for(id key in state)if(![@[@"status",@"sidebar",@"settings"] containsObject:key])return LOADER_ERR_INVALID;
+ for(id key in state)if(![@[@"status",@"sidebar",@"settings",@"icon",@"activeIcon",@"matchIconColors"] containsObject:key])return LOADER_ERR_INVALID;
  NSMutableDictionary *next=[plugin.descriptor mutableCopy];[next addEntriesFromDictionary:state];if(!descriptor(next))return LOADER_ERR_INVALID;if(![plugin.descriptor isEqual:next]){NSDictionary *before=values(plugin);plugin.descriptor=next;generation++;NSDictionary *after=values(plugin);if(![before isEqual:after])notify(plugin,@{@"kind":@"settings",@"settings":after});}return LOADER_OK;}
+int loader_plugin_ui_apply_icon_defaults(NSString *identifier,NSDictionary *definition){
+ if(!NSThread.isMainThread||![definition isKindOfClass:NSDictionary.class])return LOADER_ERR_INVALID;
+ ExtendUIPlugin *plugin=plugins[identifier];if(!plugin)return LOADER_ERR_INVALID;
+ NSMutableDictionary *next=[plugin.descriptor mutableCopy];
+ for(NSString *key in @[@"icon",@"activeIcon",@"matchIconColors"])if(!next[key]&&definition[key])next[key]=definition[key];
+ if(!descriptor(next))return LOADER_ERR_INVALID;
+ if(![plugin.descriptor isEqual:next]){plugin.descriptor=next;generation++;}
+ return LOADER_OK;
+}
 static NSDictionary *snapshot(void){NSDictionary *(*manager)(void)=dlsym(RTLD_DEFAULT,"loader_plugin_manager_snapshot");NSDictionary *managerState=manager?manager():@{};NSMutableArray *items=[NSMutableArray new];for(NSString *key in [plugins.allKeys sortedArrayUsingSelector:@selector(compare:)]){ExtendUIPlugin *p=plugins[key];NSMutableDictionary *item=[p.descriptor mutableCopy];item[@"visible"]=saved(key)?saved(key)[@"visible"]:@YES;item[@"values"]=values(p);[items addObject:item];}
  return @{@"generation":@(generation),@"manager":managerState,@"plugins":items,@"canPersist":@(!persistenceError),@"persistenceError":persistenceError?:@"",@"hostPid":@(getpid()),@"extendEntryVisible":saved(@"opensv2.extend")?saved(@"opensv2.extend")[@"visible"]:@YES};}
 static BOOL persist(NSMutableDictionary *next){if(persistenceError||!preferenceFile)return NO;

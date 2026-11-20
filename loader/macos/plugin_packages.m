@@ -9,6 +9,7 @@
 #include <limits.h>
 #include <unistd.h>
 extern NSDictionary *loader_plugin_ui_call(NSString*,NSDictionary*);
+extern int loader_plugin_ui_apply_icon_defaults(NSString*,NSDictionary*);
 static NSArray<NSDictionary*> *packages;
 static NSMutableDictionary<NSString*,NSValue*> *modules;
 static BOOL bootstrapAttempted,normalAttempted;
@@ -80,6 +81,8 @@ void loader_load_plugin_packages(const loader_api_v1 *api){
   loader_plugin_init_v1_fn entry=(loader_plugin_init_v1_fn)dlsym(module,"loader_plugin_init_v1");int result=entry?entry(api):LOADER_ERR_INVALID;
   BOOL registered=NO;for(NSDictionary *item in loader_plugin_ui_call(@"ui.snapshot",@{})[@"result"][@"plugins"])if([item[@"id"] isEqual:definition[@"id"]])registered=YES;
   if(!registered){NSDictionary *ui=@{@"id":definition[@"id"],@"name":title,@"version":version,@"status":result==0?@"已就绪":@"初始化失败",@"sidebar":@{@"title":title,@"rows":@[@{@"type":@"label",@"text":result==0?@"插件已加载到宿主":@"插件初始化失败；模块保留至宿主退出"}]},@"settings":@[]};NSData *json=[NSJSONSerialization dataWithJSONObject:ui options:0 error:NULL];NSString *text=[[NSString alloc]initWithData:json encoding:NSUTF8StringEncoding];api->register_plugin_ui(text.UTF8String,NULL,module);}
+  if(loader_plugin_ui_apply_icon_defaults(definition[@"id"],definition)!=LOADER_OK)
+   api->log("plugin-package-icon-invalid");
   api->log(result==0?"plugin-package-resident-ready":"plugin-package-entry-failed");
  }
 }
