@@ -12,6 +12,7 @@
 #include <cmath>
 #include <string.h>
 #include <sys/stat.h>
+#include "../packages/builtin_icons.h"
 extern "C" bool loader_native_panel_owns(void*,void*);
 extern "C" void loader_native_panel_remove(void*);
 extern "C" void loader_native_panel_capture(void*,NSString*,bool,intptr_t);
@@ -21,7 +22,7 @@ extern "C" const char *loader_host_data_directory(void);
 namespace {
 static intptr_t slide;
 // Hide dormant handles to avoid occupying toolbar space.
-struct Category {void *registry[8],*descriptorTable[28];void **object;char identifier[97],label[513];bool present,visible;uint64_t renderedGeneration;};
+struct Category {void *registry[8],*descriptorTable[28];void **object;char identifier[97],label[513],icon[4096];bool present,visible;uint64_t renderedGeneration;};
 static Category categories[33];
 static NSMutableSet<NSValue*> *panes;
 static NSMutableSet<NSValue*> *bars;
@@ -40,12 +41,8 @@ static int position(void *self){auto c=fromSelf(self);return 1000+(c?(int)(c-cat
 static void noDestroy(void*){}
 static void *getRegistry(void *model){int index=modelIndex(model);return index<0?nullptr:&categories[index].object;}
 static void *descriptor(void *self){auto c=fromSelf(self);if(!c)return nullptr;void *p=((void*(*)(size_t))(slide+0x101197690ULL))(0x50);((void(*)(void*,int))(slide+0x100ecfee0ULL))(p,1);*(void**)p=(void*)(slide+0x1015be1a8ULL);((void(*)(void*,int,int))(slide+0x100ed3320ULL))(p,0xf0,1);*(void**)p=c->descriptorTable+2;return p;}
-static const char rootSVG[]="<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"24\" height=\"24\" viewBox=\"0 0 24 24\"><rect width=\"24\" height=\"24\" fill=\"#000000\" opacity=\"0\"/><g transform=\"translate(3 3) scale(.75)\" fill=\"none\" stroke=\"#000000\" stroke-width=\"1.5\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><rect x=\"3\" y=\"3\" width=\"6\" height=\"6\" rx=\"1\"/><rect x=\"3\" y=\"15\" width=\"6\" height=\"6\" rx=\"1\"/><rect x=\"15\" y=\"15\" width=\"6\" height=\"6\" rx=\"1\"/><path d=\"M14 6h8M18 2v8\"/></g></svg>";
-static const char pluginSVG[]="<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"24\" height=\"24\" viewBox=\"0 0 24 24\"><rect width=\"24\" height=\"24\" fill=\"#000000\" opacity=\"0\"/><g transform=\"translate(3 3) scale(.75)\" fill=\"none\" stroke=\"#000000\" stroke-width=\"1.5\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><path d=\"M4 4h6V3a2 2 0 0 1 4 0v1h6v6h1a2 2 0 0 1 0 4h-1v6h-6v-1a2 2 0 0 0-4 0v1H4v-6h1a2 2 0 0 0 0-4H4z\"/></g></svg>";
-static const char javascriptSVG[]="<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"24\" height=\"24\" viewBox=\"0 0 24 24\"><rect width=\"24\" height=\"24\" fill=\"#000000\" opacity=\"0\"/><g transform=\"translate(3 3) scale(.75)\"><rect x=\"2\" y=\"2\" width=\"20\" height=\"20\" rx=\"1\" fill=\"none\" stroke=\"#000000\" stroke-width=\"1.4\"/><path d=\"M11 9v7c0 3-4 3-5 1m13-7c-3-2-6 1-3 3l2 1c4 3-1 6-4 3\" fill=\"none\" stroke=\"#000000\" stroke-width=\"1.7\" stroke-linecap=\"round\"/></g></svg>";
-static const char luaSVG[]="<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"24\" height=\"24\" viewBox=\"0 0 24 24\"><rect width=\"24\" height=\"24\" fill=\"#000000\" opacity=\"0\"/><g transform=\"translate(3 3) scale(.75)\"><path fill=\"#000000\" fill-rule=\"evenodd\" d=\"M19 13a8 8 0 1 1-16 0 8 8 0 0 1 16 0z M17 10a3 3 0 1 1-6 0 3 3 0 0 1 6 0z\"/><circle cx=\"21\" cy=\"3\" r=\"2\" fill=\"#000000\"/></g></svg>";
-static const char mcpSVG[]="<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"24\" height=\"24\" viewBox=\"0 0 24 24\"><rect width=\"24\" height=\"24\" fill=\"#000000\" opacity=\"0\"/><g transform=\"translate(3 3) scale(.75)\" fill=\"none\" stroke=\"#000000\" stroke-width=\"1.5\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><circle cx=\"5\" cy=\"12\" r=\"3\"/><circle cx=\"19\" cy=\"5\" r=\"3\"/><circle cx=\"19\" cy=\"19\" r=\"3\"/><path d=\"m8 10 8-4M8 14l8 4\"/></g></svg>";
-static Drawable icon(void *self){auto c=fromSelf(self);const char *svg=c==categories?rootSVG:c&&!strcmp(c->identifier,"opensv2.javascript-extend")?javascriptSVG:c&&!strcmp(c->identifier,"opensv2.lua-extend")?luaSVG:c&&!strcmp(c->identifier,"opensv2.mcp")?mcpSVG:pluginSVG;return ((Drawable(*)(const void*,size_t))(slide+0x10080a154ULL))(svg,strlen(svg));}
+// The Loader owns the root icon; every other category shows its declared icon, falling back to the generic plugin mark.
+static Drawable icon(void *self){auto c=fromSelf(self);const char *svg=c==categories?OPENSV2_ICON_ROOT:(c&&c->icon[0])?c->icon:OPENSV2_ICON_PLUGIN;return ((Drawable(*)(const void*,size_t))(slide+0x10080a154ULL))(svg,strlen(svg));}
 static void remove(void *pane){
  loader_native_panel_remove(pane);
  [panes removeObject:[NSValue valueWithPointer:pane]];
@@ -133,7 +130,7 @@ static void syncCategories(){NSDictionary *snapshot=loader_plugin_ui_call(@"ui.s
  for(NSDictionary *plugin in snapshot[@"plugins"]){Category *category=nullptr;NSString *identifier=plugin[@"id"];for(unsigned i=1;i<33;i++)if(!strcmp(categories[i].identifier,identifier.UTF8String)){category=&categories[i];break;}
  if(!category){for(unsigned i=1;i<33;i++)if(!categories[i].identifier[0]){category=&categories[i];break;}}
  if(!category){for(unsigned i=1;i<33;i++)if(![identifiers containsObject:@(categories[i].identifier)]){category=&categories[i];closeCategory(category);for(NSValue *key in panes.allObjects)if(paneIndex(key.pointerValue)==(int)i)remove(key.pointerValue);break;}}
- if(!category)continue;strlcpy(category->identifier,identifier.UTF8String,sizeof category->identifier);strlcpy(category->label,[plugin[@"name"] UTF8String],sizeof category->label);category->present=true;category->visible=[plugin[@"visible"] boolValue];
+ if(!category)continue;strlcpy(category->identifier,identifier.UTF8String,sizeof category->identifier);strlcpy(category->label,[plugin[@"name"] UTF8String],sizeof category->label);strlcpy(category->icon,[plugin[@"icon"] isKindOfClass:NSString.class]?[plugin[@"icon"] UTF8String]:"",sizeof category->icon);category->present=true;category->visible=[plugin[@"visible"] boolValue];
  }
  for(unsigned i=1;i<33;i++)if(!categories[i].present||!categories[i].visible)closeCategory(&categories[i]);
  for(NSValue *key in bars.allObjects)barLayout(key.pointerValue);

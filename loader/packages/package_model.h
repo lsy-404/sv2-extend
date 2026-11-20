@@ -76,7 +76,7 @@ struct Tool{std::string name,method;json description,inputSchema;Call call;};
 // A menu is at most two levels: actions, or titled groups of actions.
 struct MenuItem{std::string id,title;bool group=false;Call call;};
 struct Manifest{
- std::string id,name,version,loader="*",main,update_url;bool enabled=true,native=false,panel=false;
+ std::string id,name,version,loader="*",main,update_url,icon;bool enabled=true,native=false,panel=false;
  std::map<std::string,std::string> capabilities,packages;std::vector<std::string> permissions,methods;std::vector<Tool> tools;std::vector<MenuItem> menu;
  bool permits(const std::string &key)const{for(const auto &entry:permissions)if(entry==key)return true;return false;}
 };
@@ -183,6 +183,11 @@ inline std::string parse(const json &definition,Manifest &out){
   out.update_url=update["url"].get<std::string>();if(out.update_url.rfind("https://",0)!=0)return "update";
  }
  if(out.permits("update")&&out.update_url.empty())return "update";
+ if(definition.contains("icon")){
+  // The package declares its own category icon (inline SVG); both platforms render it.
+  if(!text(definition["icon"],2048))return "icon";out.icon=definition["icon"].get<std::string>();
+  if(out.icon.rfind("<svg",0)!=0)return "icon";
+ }
  return "";
 }
 

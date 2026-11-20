@@ -18,7 +18,7 @@
 namespace native_panel {
 using json=nlohmann::json;
 struct Plugin { json descriptor, values; loader_plugin_ui_event event; void *owner; };
-struct Category { std::string id, title; bool visible; };
+struct Category { std::string id, title, icon; bool visible; };
 struct Control {
  std::string plugin,key,type,caption,observed;
  json value,definition;
@@ -86,6 +86,7 @@ static bool field_value(const json &f,const json &v) {
 }
 static bool valid(const json &d) {
  if(!d.is_object()||!d.contains("id")||!name(d["id"])||!d.contains("name")||!text(d["name"],128)||d["name"].get<std::string>().empty()||!d.contains("version")||!text(d["version"],64)||!d.contains("status")||!text(d["status"],128)||!d.contains("sidebar")||!d["sidebar"].is_object()||!d["sidebar"].contains("title")||!text(d["sidebar"]["title"],128)||!d["sidebar"].contains("rows")||!d["sidebar"]["rows"].is_array()||d["sidebar"]["rows"].size()>32||!d.contains("settings")||!d["settings"].is_array()||d["settings"].size()>64)return false;
+ if(d.contains("icon")&&!text(d["icon"],2048))return false;
  const auto &sidebar=d["sidebar"];if(sidebar.contains("rowsBeforeSettings")&&(!sidebar["rowsBeforeSettings"].is_number_integer()||sidebar["rowsBeforeSettings"]<0||sidebar["rowsBeforeSettings"]>sidebar["rows"].size()))return false;
  std::set<std::string> ids;
  for(auto &r:d["sidebar"]["rows"]) {if(!r.is_object()||!r.contains("type")||!r["type"].is_string()||!r.contains("text")||!text(r["text"],512))return false; auto t=r["type"].get<std::string>(); if(t=="label")continue; if(t!="button"||!r.contains("id")||!name(r["id"])||!ids.insert(r["id"].get<std::string>()).second)return false;}
@@ -102,7 +103,7 @@ static bool save_state(const json &next,const json &next_visibility) {
 }
 static bool save_values(const std::string &id,const json &values){auto next=preferences;next[id]=values;return save_state(next,visibility);}
 static void notify(const std::string &id,const json &event) {auto it=plugins.find(id);if(it==plugins.end()||!it->second.event)return; auto callback=it->second.event;auto owner=it->second.owner;std::string body=event.dump();callback(body.c_str(),owner);}
-[[maybe_unused]] static std::vector<Category> categories(){std::vector<Category> result;for(const auto &p:plugins)result.push_back({p.first,p.second.descriptor["name"].get<std::string>(),!visibility.contains(p.first)||!visibility[p.first].is_boolean()||visibility[p.first].get<bool>()});return result;}
+[[maybe_unused]] static std::vector<Category> categories(){std::vector<Category> result;for(const auto &p:plugins)result.push_back({p.first,p.second.descriptor["name"].get<std::string>(),p.second.descriptor.value("icon",std::string()),!visibility.contains(p.first)||!visibility[p.first].is_boolean()||visibility[p.first].get<bool>()});return result;}
 [[maybe_unused]] static void set_categories_changed(bool(*callback)()){categories_changed=callback;}
 [[maybe_unused]] static void set_open_category(int(*callback)(const char*)){open_category=callback;}
 

@@ -7,6 +7,7 @@
 #include <filesystem>
 #include <fstream>
 #include "protocol.h"
+#include "../../../loader/packages/builtin_icons.h"
 namespace {
 const loader_api_v1* loader=nullptr;
 HANDLE server=nullptr;
@@ -37,7 +38,7 @@ void install_panel(){
  WNDCLASSW cls{};cls.lpfnWndProc=panel_proc;cls.hInstance=GetModuleHandleW(nullptr);cls.lpszClassName=L"SV2ExtendMcpPanelDispatch";if(!RegisterClassW(&cls)&&GetLastError()!=ERROR_CLASS_ALREADY_EXISTS)return;panel_dispatcher=CreateWindowExW(0,cls.lpszClassName,L"",0,0,0,0,0,HWND_MESSAGE,nullptr,cls.hInstance,nullptr);if(!panel_dispatcher)return;
  auto fields=windows_mcp::json::array({{{"key","enabled"},{"title","启用 MCP"},{"type","boolean"},{"default",true}},{{"key","showEndpoint"},{"title","侧栏显示连接命令"},{"type","boolean"},{"default",false}}});
  size_t builtin_count=0;auto builtin_list=windows_mcp::builtins(builtin_count);for(size_t i=0;i<builtin_count;i++)fields.push_back({{"key",std::string("tool.")+builtin_list[i].name},{"title",builtin_list[i].title},{"type","boolean"},{"default",true}});
- auto descriptor=windows_mcp::json{{"id","sv2.mcp"},{"name","MCP"},{"version","0.3.0"},{"status",!windows_mcp::enabled("enabled")?(server_running?"Disabled (listener active)":"Disabled"):server_running?"Listening":"Unavailable"},{"sidebar",panel_sidebar()},{"settings",fields}}.dump();if(loader->register_plugin_ui(descriptor.c_str(),panel_event,nullptr)!=LOADER_OK){DestroyWindow(panel_dispatcher);panel_dispatcher=nullptr;return;}panel_refresh();
+ auto descriptor=windows_mcp::json{{"id","sv2.mcp"},{"name","MCP"},{"version","0.3.0"},{"icon",OPENSV2_ICON_MCP},{"status",!windows_mcp::enabled("enabled")?(server_running?"Disabled (listener active)":"Disabled"):server_running?"Listening":"Unavailable"},{"sidebar",panel_sidebar()},{"settings",fields}}.dump();if(loader->register_plugin_ui(descriptor.c_str(),panel_event,nullptr)!=LOADER_OK){DestroyWindow(panel_dispatcher);panel_dispatcher=nullptr;return;}panel_refresh();
 }
 struct Pending {
  std::atomic<int> refs{2};HANDLE event=CreateEventW(nullptr,TRUE,FALSE,nullptr);std::string response;

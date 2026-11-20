@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #import <Foundation/Foundation.h>
 #include "../../loader/macos/loader_api.h"
+#include "../../loader/packages/builtin_icons.h"
 #include <stdatomic.h>
 static _Atomic int mcpEnabled;
 static BOOL listening;
@@ -118,7 +119,7 @@ int loader_plugin_init_v1(const loader_api_v1 *api) {
  NSMutableArray *fields=[NSMutableArray arrayWithObjects:@{@"key":@"enabled",@"title":@"启用 MCP",@"type":@"boolean",@"default":@YES},@{@"key":@"showEndpoint",@"title":@"侧栏显示连接地址",@"type":@"boolean",@"default":@NO},nil];
  NSDictionary *titles=@{@"sv_status":@"读取服务状态",@"sv_read_editor":@"读取工程与选区",@"sv_read_voicebank":@"读取当前声库",@"sv_project_voicebanks":@"读取工程声库",@"sv_list_voicebanks":@"读取声库列表",@"sv_select_voicebank":@"切换声库",@"sv_set_note_pitch":@"修改音符音高",@"sv_read_pitch_range":@"读取音高曲线",@"sv_set_pitch_curve":@"修改音高曲线",@"sv_export_snapshot":@"读取导出状态",@"sv_export_wav":@"开始导出",@"sv_export_status":@"查询导出任务",@"sv_export_cancel":@"取消导出任务",@"sv_create_group":@"创建音符组",@"sv_remove_group":@"删除音符组",@"sv_add_note":@"添加音符",@"sv_remove_note":@"删除音符"};
  for(NSDictionary *tool in toolDefinitions())[fields addObject:@{@"key":[@"tool." stringByAppendingString:tool[@"name"]],@"title":titles[tool[@"name"]]?:tool[@"name"],@"detail":tool[@"name"],@"section":@"MCP 工具",@"type":@"boolean",@"default":@YES}];
- NSDictionary *descriptor=@{@"id":@"opensv2.mcp",@"name":@"SV2 MCP",@"version":@"0.3.0",@"status":@"正在启动",@"sidebar":@{@"title":@"SV2 MCP",@"rows":@[]},@"settings":fields};
+ NSDictionary *descriptor=@{@"id":@"opensv2.mcp",@"name":@"SV2 MCP",@"version":@"0.3.0",@"icon":@(OPENSV2_ICON_MCP),@"status":@"正在启动",@"sidebar":@{@"title":@"SV2 MCP",@"rows":@[]},@"settings":fields};
  NSData *data=[NSJSONSerialization dataWithJSONObject:descriptor options:0 error:NULL];NSString *encoded=[[NSString alloc]initWithData:data encoding:NSUTF8StringEncoding];
  return loader->register_plugin_ui(encoded.UTF8String,updateUI,NULL);
 }

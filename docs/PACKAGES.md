@@ -47,6 +47,7 @@
 | `permissions` | 需要用户开启的权限：可授权能力的标识，或 `package.<id>`（调用所依赖的包提供的方法）。 |
 | `main` | 包代码入口，包内相对路径的 `.lua` 文件；需要能力 `runtime.lua`。 |
 | `update.url` | 包自己声明的更新端点（必须 HTTPS）。加载器把 `update.fetch` 锁定到此地址，并在包状态和 `extend.package.update` 中公开它。 |
+| `icon` | 包的分类图标，内联 SVG 字符串（以 `<svg` 开头，≤2048 字节）。两平台据此渲染；不声明时用通用插件图标。 |
 | `contributes.methods` | 向依赖本包的其他包公开的处理函数名，方法名为 `<包 id>.<函数名>`；需要 `main`。 |
 | `contributes.mcpTools` | MCP 工具，名称以 `svext_` 开头；需要能力 `mcp.tools`。 |
 | `contributes.panel.menu` | 在 Extend 中注册的面板菜单：动作，或带标题的一组动作，最多 24 行；需要能力 `panel`。 |
@@ -218,11 +219,19 @@ end
 
 原生包驻留到宿主退出，新增的原生包在下次启动时加载。
 
+## 外观
+
+扩展包的分类图标由包自己声明（清单 `icon`，内联 SVG），经插件面板描述符流向两平台的分类栏，由加载器统一渲染：声明了图标就用声明值，否则回退到通用插件图标；Extend 根分类图标由加载器自有。内置运行时（Lua / JavaScript 扩展、MCP）同样在各自描述符里声明图标，不再由加载器按分类标识硬编码，因此两平台表现一致、与分类标识无关。图标素材集中在 `loader/packages/builtin_icons.h`，macOS 与 Windows 共用同一份。
+
 ## 平台状态
 
 | 平台 | 状态 |
 | --- | --- |
 | Windows x64 | 已实现；独立 fixture 宿主验证了依赖解析、授权与拒绝、存储读写、缺少能力时不加载、运行时卸载与恢复、包代码处理调用、依赖包代码被调用、失控代码被终止、运行时隔离，包读取自带密文、在内存解密并加载执行且篡改密文被拒绝，更新端点声明的公开与 `update.fetch` 的权限锁定，以及包开启本机 HTTP 服务并经出站请求访问它、令牌校验和非回环 `http://` 被拒绝。HTTPS 与证书校验用独立程序对公网站点验证过。尚未在 SV2 宿主中验证，包括离线策略对包请求的影响。 |
-| macOS | 声明式运行时尚未移植：当前 macOS 加载器只处理带原生库的包，无原生库的包会被跳过。平台无关部分（`package_model.h`、`package_runtime.h`、`package_crypto.h`）已就绪，其中 AES-GCM 原语已含 CommonCrypto 后端；仍需把清单解析、Lua 运行时、能力与网络接入 macOS 加载器，密封逻辑与更新随之生效。该移植需在 macOS 工具链上构建验证。 |
+| macOS | 声明式运行时尚未移植：当前 macOS 加载器只处理带原生库的包，无原生库的包会被跳过。平台无关部分（`package_model.h`、`package_runtime.h`、`package_crypto.h`、`builtin_icons.h`）已就绪，其中 AES-GCM 原语已含 CommonCrypto 后端；仍需把清单解析、Lua 运行时、能力与网络接入 macOS 加载器，密封逻辑与更新随之生效。该移植需在 macOS 工具链上构建验证。 |
+
+## 跨平台对齐
+
+两平台共享的契约集中在 `loader/packages/`（清单模型、运行时、AES-GCM 原语、图标素材），各平台加载器消费同一份。已对齐的行为：清单 schema 与能力目录、插件面板描述符（id/name/version/status/sidebar/settings，新增 `icon`）、分类图标渲染（声明式、与标识无关）。仍存在的差异：声明式运行时（Lua 运行时、能力、网络、密封逻辑、更新）目前只在 Windows，macOS 待移植（见上）；MCP 分类标识在两平台分别为 `sv2.mcp`（Windows）与 `opensv2.mcp`（macOS），因图标改为声明式后已不影响外观，统一标识需连带偏好迁移，另行处理。本机只有 Windows 工具链，macOS 侧改动按契约对齐、随 macOS 构建验证。
 
 包代码目前只有 Lua 运行时。向宿主用户脚本（官方 Lua/JS）提供模块尚未实现。

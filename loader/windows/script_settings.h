@@ -4,7 +4,7 @@
 #include "../../sdk/include/loader_api.h"
 namespace script_settings {
 using json=nlohmann::json;
-struct Runtime {const loader_api_v1 *api;const char *id;const char *title;bool ready;json values=json::object();};
+struct Runtime {const loader_api_v1 *api;const char *id;const char *title;const char *icon;bool ready;json values=json::object();};
 inline json fields(bool lua){
  json result=json::array({{{"key","enabled"},{"title",lua?"启用 Lua Extend":"启用 JS Extend"},{"type","boolean"},{"default",true}}});
  const char *items[][4]={
@@ -27,7 +27,7 @@ inline void changed(const char *body,void *owner){
 }
 inline int register_runtime(Runtime &runtime,bool lua){
  if(!runtime.api||!runtime.api->register_plugin_ui)return LOADER_ERR_NOT_SUPPORTED;
- auto descriptor=json{{"id",runtime.id},{"name",runtime.title},{"version","1.1"},{"status",runtime.ready?"已就绪":"当前宿主不可用"},{"sidebar",{{"title",runtime.title},{"rows",json::array({{{"type","label"},{"text",runtime.ready?"原生扩展接口可用":"原生扩展接口不可用"}}})}}},{"settings",fields(lua)}}.dump();
+ auto descriptor=json{{"id",runtime.id},{"name",runtime.title},{"version","1.1"},{"icon",runtime.icon},{"status",runtime.ready?"已就绪":"当前宿主不可用"},{"sidebar",{{"title",runtime.title},{"rows",json::array({{{"type","label"},{"text",runtime.ready?"原生扩展接口可用":"原生扩展接口不可用"}}})}}},{"settings",fields(lua)}}.dump();
  return runtime.api->register_plugin_ui(descriptor.c_str(),changed,&runtime);
 }
 inline bool enabled(const Runtime &runtime,const std::string &key){auto it=runtime.values.find(key);return it==runtime.values.end()||!it->is_boolean()||it->get<bool>();}

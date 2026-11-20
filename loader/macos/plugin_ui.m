@@ -2,6 +2,7 @@
 // never as script request/reply transport. Account actions remain plugin-owned.
 #import <Foundation/Foundation.h>
 #include "loader_api.h"
+#include "../packages/builtin_icons.h"
 #include <sys/stat.h>
 #include <fcntl.h>
 #include <unistd.h>
@@ -127,7 +128,7 @@ void loader_plugin_ui_register_runtimes(int luaReady,int jsReady){
    @[@"http.start",@"发起本地或在线请求",@"HTTP 请求",@"http"],@[@"http.status",@"查询请求结果",@"HTTP 请求",@"http"],@[@"http.cancel",@"取消请求",@"HTTP 请求",@"http"]];
   for(NSArray *field in functions)[fields addObject:@{@"key":field[0],@"title":field[1],@"detail":field[0],@"section":field[2],@"legacyGroup":field[3],@"type":@"boolean",@"default":@YES}];
   [fields addObject:@{@"key":@"showDetails",@"title":@"显示运行详情",@"type":@"boolean",@"default":@NO}];
-  NSDictionary *d=@{@"id":identifier,@"name":title,@"version":@"1.1",@"status":ready?@"已就绪":@"当前宿主不可用",@"sidebar":@{@"title":title,@"rows":@[@{@"type":@"label",@"text":ready?@"原生扩展接口可用":@"原生扩展接口不可用"}]},@"settings":fields};
+  NSDictionary *d=@{@"id":identifier,@"name":title,@"version":@"1.1",@"icon":@(lua?OPENSV2_ICON_LUA:OPENSV2_ICON_JAVASCRIPT),@"status":ready?@"已就绪":@"当前宿主不可用",@"sidebar":@{@"title":title,@"rows":@[@{@"type":@"label",@"text":ready?@"原生扩展接口可用":@"原生扩展接口不可用"}]},@"settings":fields};
   NSData *data=[NSJSONSerialization dataWithJSONObject:d options:0 error:NULL];NSString *text=[[NSString alloc]initWithData:data encoding:NSUTF8StringEncoding];loader_register_plugin_ui(text.UTF8String,runtimeChanged,(void*)context);
  }
 }
