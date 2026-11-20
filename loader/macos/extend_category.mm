@@ -68,10 +68,11 @@ static void refreshIcon(void *button,Category &category,bool active){
     found->second.active==active&&found->second.copies[0]==copies[0]&&
     found->second.copies[1]==copies[1]&&found->second.copies[2]==copies[2])return;
  const char *source=category.icon[0]?category.icon:OPENSV2_ICON_PLUGIN;
- std::string svg=panel_icon::resolve(source,category.activeIcon,category.matchIconColors,active);
+ bool nativeColors=false;
+ std::string svg=panel_icon::resolve(source,category.activeIcon,category.matchIconColors,active,&nativeColors);
  Drawable normal=parseIcon(svg);
  if(!normal.p)return;
- bool raw=!category.matchIconColors||(active&&category.activeIcon[0]);
+ bool raw=!nativeColors;
  Drawable first=raw?parseIcon(svg):Drawable{nullptr};
  Drawable second=raw?parseIcon(svg):Drawable{nullptr};
  Drawable third=raw?parseIcon(svg):Drawable{nullptr};

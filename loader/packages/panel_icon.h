@@ -37,7 +37,8 @@ inline Paint paint(std::string_view value) {
 
 struct Span { size_t first, size; };
 
-inline std::string matching_mask(std::string_view svg) {
+inline std::string matching_mask(std::string_view svg,bool *native_colors=nullptr) {
+ if(native_colors) *native_colors=false;
  std::vector<Span> white;
  bool black=false;
  auto record=[&](std::string_view key,std::string_view value) {
@@ -97,12 +98,15 @@ inline std::string matching_mask(std::string_view svg) {
   }
  }
  std::string result(svg);
+ if(black && !white.empty()) return result;
+ if(native_colors) *native_colors=true;
  if(!black) for(auto it=white.rbegin();it!=white.rend();++it) result.replace(it->first,it->size,"black");
  return result;
 }
 
-inline std::string resolve(std::string_view normal,std::string_view explicit_active,bool match_colors,bool active) {
+inline std::string resolve(std::string_view normal,std::string_view explicit_active,bool match_colors,bool active,bool *native_colors=nullptr) {
+ if(native_colors) *native_colors=false;
  if(active && !explicit_active.empty()) return std::string(explicit_active);
- return match_colors ? matching_mask(normal) : std::string(normal);
+ return match_colors ? matching_mask(normal,native_colors) : std::string(normal);
 }
 }

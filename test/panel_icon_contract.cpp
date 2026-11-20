@@ -6,6 +6,9 @@ int main() {
  const std::string white=R"(<svg><path fill="none" stroke="#FFF"/></svg>)";
  const std::string black=R"(<svg><path fill="none" stroke="black"/></svg>)";
  const std::string red=R"(<svg><path fill="#e61010"/></svg>)";
+ bool native=false;
+ assert(panel_icon::resolve(white,{},true,true,&native)==black && native);
+ assert(panel_icon::resolve(white,red,true,true,&native)==red && !native);
  assert(panel_icon::resolve(white,{},true,false)==black);
  assert(panel_icon::resolve(white,{},true,true)==black);
  assert(panel_icon::resolve(white,red,true,true)==red);
@@ -16,6 +19,9 @@ int main() {
         R"(<svg><path style='stroke: black; fill:none' /></svg>)");
  const std::string two_tones=R"(<svg><path fill="white"/><path fill="black"/></svg>)";
  assert(panel_icon::matching_mask(two_tones)==two_tones);
+ assert(panel_icon::matching_mask(two_tones,&native)==two_tones && !native);
+ const std::string authored=R"(<svg><path fill="red"/><path fill="black"/></svg>)";
+ assert(panel_icon::resolve(authored,{},true,true,&native)==authored && !native);
  const std::string stylesheet=R"(<svg><style>path {fill:red}</style><path fill="white"/></svg>)";
  assert(panel_icon::matching_mask(stylesheet)==stylesheet);
  const std::string comment=R"(<svg><!-- fill="red" --><path fill="white"/></svg>)";
