@@ -242,6 +242,12 @@ void execute(Package &package,const package_model::Call &call,const json &argume
   package.runtime->invoke(call.handler,merged,[complete,context](const json &response){auto body=response.dump(-1,' ',false,json::error_handler_t::replace);complete(body.data(),body.size(),context);});return;
  }
  if(call.method=="storage.read"||call.method=="storage.write"){if(!package.manifest.capabilities.count("storage"))fail({{"code","PERMISSION_UNDECLARED"},{"package",package.manifest.id},{"method",call.method}});else finish(storage_call(package,call.method,merged));return;}
+ if(call.method=="ui.icon"){
+  if(!package.panel||!package.manifest.capabilities.count("panel")){fail({{"code","PANEL_UNAVAILABLE"}});return;}
+  if(!merged.is_object()||merged.empty()||!package_model::keys_within(merged,{"icon","activeIcon","matchIconColors"})||
+   native_panel::update_ui(package.manifest.id.c_str(),merged.dump().c_str(),&package)!=LOADER_OK){fail({{"code","INVALID_ICON"}});return;}
+  finish({{"ok",true},{"result",json::object()}});return;
+ }
  std::string key;if(auto code=permission_key(package,call.method,key)){fail({{"code",code},{"package",package.manifest.id},{"method",call.method}});return;}
  if(!package.grants.value("grant."+key,false)){fail({{"code","PERMISSION_DENIED"},{"package",package.manifest.id},{"permission",key}});return;}
  if(call.method=="http.request"||call.method=="update.fetch"){
@@ -357,6 +363,17 @@ void package_panel(Package &package){
  package.panel=true;if(native_panel::register_ui(descriptor.dump().c_str(),package_changed,&package)!=LOADER_OK){package.panel=false;log_message("package-panel-unavailable");}
 }
 void startup_receipt();
+int register_package_ui(const char *raw,loader_plugin_ui_event event,void *owner){
+ auto package=packages.find(current_package);
+ if(package==packages.end()||!package->second->manifest.native)return native_panel::register_ui(raw,event,owner);
+ auto descriptor=native_panel::parse(raw);
+ const auto &manifest=package->second->manifest;
+ if(!descriptor.is_object()||!descriptor.contains("id")||descriptor["id"]!=manifest.id)return native_panel::register_ui(raw,event,owner);
+ if(!descriptor.contains("icon")&&!manifest.icon.empty())descriptor["icon"]=manifest.icon;
+ if(!descriptor.contains("activeIcon")&&!manifest.active_icon.empty())descriptor["activeIcon"]=manifest.active_icon;
+ if(!descriptor.contains("matchIconColors"))descriptor["matchIconColors"]=manifest.match_icon_colors;
+ return native_panel::register_ui(descriptor.dump().c_str(),event,owner);
+}
 const char *load_native(Package &package){
  const auto &definition=package.definition;auto key=loader_platform_key();const auto &libraries=definition["nativeLibraries"];
  if(!libraries.is_object()||!libraries.contains(key)||!libraries[key].is_string())return "native-platform";
@@ -472,7 +489,7 @@ extern "C" __declspec(dllexport) int ExtendInitialize(void*){
  api.abi_version=1;api.struct_size=sizeof api;api.capabilities=LOADER_CAP_NETWORK_STATE|LOADER_CAP_PLUGIN_UI|LOADER_CAP_SCOPED_STORAGE|(managed?(LOADER_CAP_HOST_DATA_NAMESPACE|LOADER_CAP_PROFILE_LEASE):0);api.host_pid=GetCurrentProcessId();api.on_main_thread=1;api.host_executable=executable.c_str();api.log=log_message;
  api.set_host_network_blocked=block;api.host_network_blocked=blocked;api.plugin_http_get=http;api.get_host_network_state=network_state;api.verify_host_network_quiescence=verify;api.plugin_storage_write=storage;
  api.register_editor_adapter=register_editor;api.unregister_editor_adapter=unregister_editor;api.editor_request_json=request;api.request_capability_json=request;api.register_capability_provider=register_provider;api.unregister_capability_provider=unregister_provider;
- api.listen_local_json=listen;api.stop_local_json=stop;api.host_data_directory=host_data;api.register_plugin_ui=native_panel::register_ui;api.unregister_plugin_ui=native_panel::unregister_ui;api.update_plugin_ui=native_panel::update_ui;
+ api.listen_local_json=listen;api.stop_local_json=stop;api.host_data_directory=host_data;api.register_plugin_ui=register_package_ui;api.unregister_plugin_ui=native_panel::unregister_ui;api.update_plugin_ui=native_panel::update_ui;
  api.set_startup_network_guard=guard;api.get_startup_network_policy=policy;api.list_startup_network_guards=guards;api.acquire_profile_exclusive=acquire_profile;api.release_profile_exclusive=release_profile;api.get_profile_lease_state=lease_state;api.retire_host_web_renderers=retire_renderer;api.retire_host_web_contexts=retire_renderer;api.plugin_storage_write_scoped=storage_scoped;api.plugin_storage_read_scoped=storage_read;
  api.get_host_network_policy=network_policy;api.register_host_navigation_handler=windows_host_navigation::add;api.unregister_host_navigation_handler=windows_host_navigation::remove;if(managed)api.capabilities|=LOADER_CAP_NETWORK_POLICY_SWITCH|LOADER_CAP_STARTUP_NETWORK_GUARD|LOADER_CAP_HOST_NAVIGATION;
  if(managed){editor_service=std::make_unique<editor_lua::Service>(&api);editor_gate_result=editor_gate::install(editor_service.get());if(editor_gate_result==LOADER_OK){auto entry=root/L"host-data"/L"Roaming"/L"Dreamtonics"/L"Synthesizer V Studio 2"/L"scripts"/L"opensv2-loader-runtime.lua";editor_start_result=editor_autostart::install(editor_service.get(),entry.c_str());}}
