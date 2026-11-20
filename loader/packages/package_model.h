@@ -8,6 +8,7 @@
 #include <set>
 #include <string>
 #include <vector>
+#include "panel_icon.h"
 
 namespace package_model {
 using json=nlohmann::json;
@@ -76,7 +77,7 @@ struct Tool{std::string name,method;json description,inputSchema;Call call;};
 // A menu is at most two levels: actions, or titled groups of actions.
 struct MenuItem{std::string id,title;bool group=false;Call call;};
 struct Manifest{
- std::string id,name,version,loader="*",main,update_url,icon;bool enabled=true,native=false,panel=false;
+ std::string id,name,version,loader="*",main,update_url,icon,active_icon;bool enabled=true,native=false,panel=false,match_icon_colors=true;
  std::map<std::string,std::string> capabilities,packages;std::vector<std::string> permissions,methods;std::vector<Tool> tools;std::vector<MenuItem> menu;
  bool permits(const std::string &key)const{for(const auto &entry:permissions)if(entry==key)return true;return false;}
 };
@@ -184,9 +185,16 @@ inline std::string parse(const json &definition,Manifest &out){
  }
  if(out.permits("update")&&out.update_url.empty())return "update";
  if(definition.contains("icon")){
-  // The package declares its own category icon (inline SVG); both platforms render it.
-  if(!text(definition["icon"],2048))return "icon";out.icon=definition["icon"].get<std::string>();
-  if(out.icon.rfind("<svg",0)!=0)return "icon";
+  if(!definition["icon"].is_string()||!panel_icon::valid_svg(definition["icon"].get_ref<const std::string&>()))return "icon";
+  out.icon=definition["icon"].get<std::string>();
+ }
+ if(definition.contains("activeIcon")){
+  if(!definition["activeIcon"].is_string()||!panel_icon::valid_svg(definition["activeIcon"].get_ref<const std::string&>()))return "activeIcon";
+  out.active_icon=definition["activeIcon"].get<std::string>();
+ }
+ if(definition.contains("matchIconColors")){
+  if(!definition["matchIconColors"].is_boolean())return "matchIconColors";
+  out.match_icon_colors=definition["matchIconColors"].get<bool>();
  }
  return "";
 }
