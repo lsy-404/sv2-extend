@@ -11,8 +11,11 @@
 #include <stdint.h>
 #include <cmath>
 #include <string.h>
+#include <unordered_map>
+#include <string>
 #include <sys/stat.h>
 #include "../packages/builtin_icons.h"
+#include "../packages/panel_icon.h"
 extern "C" bool loader_native_panel_owns(void*,void*);
 extern "C" void loader_native_panel_remove(void*);
 extern "C" void loader_native_panel_capture(void*,NSString*,bool,intptr_t);
@@ -22,7 +25,9 @@ extern "C" const char *loader_host_data_directory(void);
 namespace {
 static intptr_t slide;
 // Hide dormant handles to avoid occupying toolbar space.
-struct Category {void *registry[8],*descriptorTable[28];void **object;char identifier[97],label[513],icon[4096];bool present,visible;uint64_t renderedGeneration;};
+struct Category {void *registry[8],*descriptorTable[28];void **object;char identifier[97],label[513],icon[4096],activeIcon[4096];bool present,visible,matchIconColors;uint64_t renderedGeneration,iconGeneration;};
+struct ButtonIcon {const Category *category;uint64_t generation;bool active;void *copies[3];};
+static std::unordered_map<void *,ButtonIcon> buttonIcons;
 static Category categories[33];
 static NSMutableSet<NSValue*> *panes;
 static NSMutableSet<NSValue*> *bars;
@@ -42,7 +47,42 @@ static void noDestroy(void*){}
 static void *getRegistry(void *model){int index=modelIndex(model);return index<0?nullptr:&categories[index].object;}
 static void *descriptor(void *self){auto c=fromSelf(self);if(!c)return nullptr;void *p=((void*(*)(size_t))(slide+0x101197690ULL))(0x50);((void(*)(void*,int))(slide+0x100ecfee0ULL))(p,1);*(void**)p=(void*)(slide+0x1015be1a8ULL);((void(*)(void*,int,int))(slide+0x100ed3320ULL))(p,0xf0,1);*(void**)p=c->descriptorTable+2;return p;}
 // The Loader owns the root icon; every other category shows its declared icon, falling back to the generic plugin mark.
-static Drawable icon(void *self){auto c=fromSelf(self);const char *svg=c==categories?OPENSV2_ICON_ROOT:(c&&c->icon[0])?c->icon:OPENSV2_ICON_PLUGIN;return ((Drawable(*)(const void*,size_t))(slide+0x10080a154ULL))(svg,strlen(svg));}
+static Drawable icon(void *self){
+ auto c=fromSelf(self);
+ const char *source=c==categories?OPENSV2_ICON_ROOT:(c&&c->icon[0])?c->icon:OPENSV2_ICON_PLUGIN;
+ auto svg=c&&c!=categories?panel_icon::resolve(source,c->activeIcon,c->matchIconColors,false):std::string(source);
+ return ((Drawable(*)(const void*,size_t))(slide+0x10080a154ULL))(svg.data(),svg.size());
+}
+static Drawable parseIcon(const std::string &svg){
+ return ((Drawable(*)(const void*,size_t))(slide+0x10080a154ULL))(svg.data(),svg.size());
+}
+static void replaceDrawable(void **slot,Drawable &next){
+ void *previous=*slot;*slot=next.p;next.p=nullptr;
+ if(previous)((void(*)(void*))(*(void***)previous)[1])(previous);
+}
+static void refreshIcon(void *button,Category &category,bool active){
+ if(&category==categories)return;
+ auto copies=(void **)((char *)button+0x2a8);
+ auto found=buttonIcons.find(button);
+ if(found!=buttonIcons.end()&&found->second.category==&category&&found->second.generation==category.iconGeneration&&
+    found->second.active==active&&found->second.copies[0]==copies[0]&&
+    found->second.copies[1]==copies[1]&&found->second.copies[2]==copies[2])return;
+ const char *source=category.icon[0]?category.icon:OPENSV2_ICON_PLUGIN;
+ std::string svg=panel_icon::resolve(source,category.activeIcon,category.matchIconColors,active);
+ Drawable normal=parseIcon(svg);
+ if(!normal.p)return;
+ bool raw=!category.matchIconColors||(active&&category.activeIcon[0]);
+ Drawable first=raw?parseIcon(svg):Drawable{nullptr};
+ Drawable second=raw?parseIcon(svg):Drawable{nullptr};
+ Drawable third=raw?parseIcon(svg):Drawable{nullptr};
+ if(raw&&(!first.p||!second.p||!third.p))return;
+ replaceDrawable((void **)((char *)button+0x2a0),normal);
+ ((void(*)(void*,bool))(slide+0x10101f2dcULL))(button,active);
+ if(raw){
+  replaceDrawable(&copies[0],first);replaceDrawable(&copies[1],second);replaceDrawable(&copies[2],third);
+ }
+ buttonIcons[button]={&category,category.iconGeneration,active,{copies[0],copies[1],copies[2]}};
+}
 static void remove(void *pane){
  loader_native_panel_remove(pane);
  [panes removeObject:[NSValue valueWithPointer:pane]];
@@ -84,7 +124,9 @@ static void barLayout(void *bar){
  int width=*(int*)((char*)bar+0x40),height=*(int*)((char*)bar+0x44);int row=MIN(48,MAX(12,(height-(hasExtend?40:28))/MAX(1,active))),y=8;bool grouped=false;
  for(int i=0;i<count;i++){void *button=buttons[i];auto c=fromSelf(entries[i]);bool visible=!c||(c->present&&c->visible);((void(*)(void*,bool))(*(void***)button)[0x60/8])(button,visible);if(!visible){((void(*)(void*,int,int,int,int))(slide+0x1007ff7dcULL))(button,0,0,0,0);continue;}
  if(!c){const char *label=*(const char**)((char*)button+0x298);if(label&&!strcmp(label,"LICENSE"))y+=12;}
- else{if(!grouped){y+=12;grouped=true;}uintptr_t *label=(uintptr_t*)((char*)button+0x298);if(strcmp((const char*)*label,c->label)){((void(*)(void*))(slide+0x100699298ULL))(label);*label=((uintptr_t(*)(const char*))(slide+0x100662a08ULL))(c->label);}}
+ else{if(!grouped){y+=12;grouped=true;}uintptr_t *label=(uintptr_t*)((char*)button+0x298);if(strcmp((const char*)*label,c->label)){((void(*)(void*))(slide+0x100699298ULL))(label);*label=((uintptr_t(*)(const char*))(slide+0x100662a08ULL))(c->label);}
+ void *container=*(void**)((char*)bar+0xf8);void *model=((void*(*)(void*,void*))(slide+0x101024958ULL))(container,&c->object);
+ refreshIcon(button,*c,model&&!*(uint8_t*)((char*)model+0x34));}
  ((void(*)(void*,int,int,int,int))(slide+0x1007ff7dcULL))(button,0,y,width,row);y+=row;
  }
 }
@@ -121,8 +163,12 @@ static void barPaint(void *bar,void *graphics){
   drawGroupLine(bar,graphics,*(int*)((char*)buttons[i]+0x3c)-6);break;
  }
 }
-static void barDestroy(void *bar){[bars removeObject:[NSValue valueWithPointer:bar]];((void(*)(void*))(slide+0x101020e60ULL))(bar);}
-static void barDeletingDestroy(void *bar){[bars removeObject:[NSValue valueWithPointer:bar]];((void(*)(void*))(slide+0x101020f4cULL))(bar);}
+static void forgetBarIcons(void *bar){
+ void **buttons=*(void***)((char*)bar+0x220);int count=*(int*)((char*)bar+0x22c);
+ if(count>=0&&count<=64)for(int i=0;i<count;++i)buttonIcons.erase(buttons[i]);
+}
+static void barDestroy(void *bar){forgetBarIcons(bar);[bars removeObject:[NSValue valueWithPointer:bar]];((void(*)(void*))(slide+0x101020e60ULL))(bar);}
+static void barDeletingDestroy(void *bar){forgetBarIcons(bar);[bars removeObject:[NSValue valueWithPointer:bar]];((void(*)(void*))(slide+0x101020f4cULL))(bar);}
 static void closeCategory(Category *category){for(NSValue *key in bars.allObjects){void *container=*(void**)((char*)key.pointerValue+0xf8);void *model=((void*(*)(void*,void*))(slide+0x101024958ULL))(container,&category->object);if(model&&!*(uint8_t*)((char*)model+0x34)){HostString reason=string("user");((void(*)(void*,void*,const void*))(slide+0x101024b0cULL))(container,&category->object,&reason);}}}
 static void syncCategories(){NSDictionary *snapshot=loader_plugin_ui_call(@"ui.snapshot",@{})[@"result"];if(!snapshot||[snapshot[@"generation"] isEqual:lastGeneration])return;lastGeneration=snapshot[@"generation"];categories[0].visible=[snapshot[@"extendEntryVisible"] boolValue];if(!categories[0].visible)closeCategory(categories);
  NSMutableSet *identifiers=[NSMutableSet set];for(NSDictionary *item in snapshot[@"plugins"])[identifiers addObject:item[@"id"]];
@@ -130,12 +176,21 @@ static void syncCategories(){NSDictionary *snapshot=loader_plugin_ui_call(@"ui.s
  for(NSDictionary *plugin in snapshot[@"plugins"]){Category *category=nullptr;NSString *identifier=plugin[@"id"];for(unsigned i=1;i<33;i++)if(!strcmp(categories[i].identifier,identifier.UTF8String)){category=&categories[i];break;}
  if(!category){for(unsigned i=1;i<33;i++)if(!categories[i].identifier[0]){category=&categories[i];break;}}
  if(!category){for(unsigned i=1;i<33;i++)if(![identifiers containsObject:@(categories[i].identifier)]){category=&categories[i];closeCategory(category);for(NSValue *key in panes.allObjects)if(paneIndex(key.pointerValue)==(int)i)remove(key.pointerValue);break;}}
- if(!category)continue;strlcpy(category->identifier,identifier.UTF8String,sizeof category->identifier);strlcpy(category->label,[plugin[@"name"] UTF8String],sizeof category->label);strlcpy(category->icon,[plugin[@"icon"] isKindOfClass:NSString.class]?[plugin[@"icon"] UTF8String]:"",sizeof category->icon);category->present=true;category->visible=[plugin[@"visible"] boolValue];
+ if(!category)continue;
+ const char *newIcon=[plugin[@"icon"] isKindOfClass:NSString.class]?[plugin[@"icon"] UTF8String]:"";
+ const char *newActiveIcon=[plugin[@"activeIcon"] isKindOfClass:NSString.class]?[plugin[@"activeIcon"] UTF8String]:"";
+ bool matching=plugin[@"matchIconColors"]?[plugin[@"matchIconColors"] boolValue]:true;
+ if(strcmp(category->identifier,identifier.UTF8String)||strcmp(category->icon,newIcon)||
+    strcmp(category->activeIcon,newActiveIcon)||category->matchIconColors!=matching)category->iconGeneration++;
+ strlcpy(category->identifier,identifier.UTF8String,sizeof category->identifier);
+ strlcpy(category->label,[plugin[@"name"] UTF8String],sizeof category->label);
+ strlcpy(category->icon,newIcon,sizeof category->icon);strlcpy(category->activeIcon,newActiveIcon,sizeof category->activeIcon);
+ category->matchIconColors=matching;category->present=true;category->visible=[plugin[@"visible"] boolValue];
  }
  for(unsigned i=1;i<33;i++)if(!categories[i].present||!categories[i].visible)closeCategory(&categories[i]);
  for(NSValue *key in bars.allObjects)barLayout(key.pointerValue);
 }
-static void ensureTimer(){if(timer)return;timer=[NSTimer timerWithTimeInterval:.25 repeats:YES block:^(NSTimer*){syncCategories();for(NSValue *key in panes.allObjects)layout(key.pointerValue);}];[NSRunLoop.mainRunLoop addTimer:timer forMode:NSRunLoopCommonModes];}
+static void ensureTimer(){if(timer)return;timer=[NSTimer timerWithTimeInterval:.25 repeats:YES block:^(NSTimer*){syncCategories();for(NSValue *key in bars.allObjects)barLayout(key.pointerValue);for(NSValue *key in panes.allObjects)layout(key.pointerValue);}];[NSRunLoop.mainRunLoop addTimer:timer forMode:NSRunLoopCommonModes];}
 struct SlotChange {unsigned offset;void *replacement;uintptr_t expected;};
 static bool changeSlots(uintptr_t address,const SlotChange *changes,size_t number){
  void **slots=(void**)(slide+address);for(size_t i=0;i<number;i++)if(slots[changes[i].offset/8]!=(void*)(slide+changes[i].expected))return false;
@@ -166,6 +221,7 @@ static bool profile(){
  {0x1007ff7dcULL,652,"3c4b76937a224d2991e8b15dd1f421c6bb89829162131f131328e0480b83f7bf"},
  {0x101020c84ULL,328,"c569460bf8b906c8cb0d436e800575a8e609759b647aacb2e1463971647ad620"},
  {0x1010206fcULL,1272,"87c1fe1f70c255b593112b15e36c17fc6aef4b62296ff8a3a92c65e4c82cf30f"},
+ {0x10101f2dcULL,704,"23473f554006b7e29efa5eb11a8afff51f4ff779ed7f32aa9261fe8197ca66db"},
  {0x101020e60ULL,236,"c0c1a7bbb6781784a99ed4fed27777b47c0742f65b6aa4bbf0a96327ffd9090f"},
  {0x101020f4cULL,240,"ac369b8d9c384c276853a210d6f6fb181b61744987889f5641818c69869932fe"},
  {0x101024958ULL,436,"242b677b57c546560277e2c19a975f226a6dbc6f78fe0a245f84f22f443864e6"},
